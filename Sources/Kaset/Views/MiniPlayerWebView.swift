@@ -244,6 +244,7 @@ final class SingletonPlayerWebView {
 
     var displayMode: DisplayMode = .hidden
     private var mediaControlUsesNextPrev: Bool
+    private var hasStartedHomePreload = false
 
     /// Tracks if lyrics high-frequency polling should be active
     /// Used to restore polling after full-page navigation
@@ -290,7 +291,19 @@ final class SingletonPlayerWebView {
         #endif
 
         self.webView = newWebView
+        self.preloadHomePageIfNeeded()
         return newWebView
+    }
+
+    private func preloadHomePageIfNeeded() {
+        guard !UITestConfig.isRunningUnitTests else { return }
+        guard !self.hasStartedHomePreload else { return }
+        guard self.currentVideoId == nil else { return }
+        guard let webView else { return }
+
+        self.hasStartedHomePreload = true
+        self.logger.info("Preloading YT Music home page")
+        webView.load(URLRequest(url: URL(string: "https://music.youtube.com/")!))
     }
 
     /// Ensures the WebView is in the given container's view hierarchy.
