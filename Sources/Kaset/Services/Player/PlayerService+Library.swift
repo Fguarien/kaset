@@ -177,6 +177,7 @@ extension PlayerService {
         self.currentTrackLikeStatus = .indifferent
         self.currentTrackInLibrary = false
         self.currentTrackFeedbackTokens = nil
+        self.resetVideoQualityOptions()
     }
 
     private func updateCurrentTrackLibraryState(

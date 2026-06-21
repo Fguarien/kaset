@@ -2,6 +2,8 @@ import Foundation
 import Testing
 @testable import Kaset
 
+// MARK: - VideoSupportTests
+
 /// Tests for Video Support functionality.
 @Suite(.serialized, .tags(.service))
 @MainActor
@@ -132,5 +134,174 @@ struct VideoSupportTests {
         #expect(hidden == .hidden)
         #expect(miniPlayer == .miniPlayer)
         #expect(video == .video)
+    }
+
+    // MARK: - Video Quality Tests
+
+    @Test("Video quality state starts empty")
+    func videoQualityStartsEmpty() {
+        #expect(self.playerService.videoQualityLevels.isEmpty)
+        #expect(self.playerService.currentVideoQuality == nil)
+    }
+
+    @Test("selectVideoQuality optimistically records the chosen level")
+    func selectVideoQualityRecordsLevel() {
+        // No WebView in unit tests, so the underlying JS call is a no-op; the
+        // service still updates its observable state for the menu checkmark.
+        self.playerService.selectVideoQuality("hd720")
+        #expect(self.playerService.currentVideoQuality == "hd720")
+
+        self.playerService.selectVideoQuality("large")
+        #expect(self.playerService.currentVideoQuality == "large")
+    }
+
+    @Test("resetVideoQualityOptions clears levels, current, and the fetch guard")
+    func resetVideoQualityOptionsClearsState() {
+        self.playerService.videoQualityLevels = ["hd720", "large", "auto"]
+        self.playerService.currentVideoQuality = "hd720"
+        self.playerService.videoQualityOptionsVideoId = "abc"
+
+        self.playerService.resetVideoQualityOptions()
+
+        #expect(self.playerService.videoQualityLevels.isEmpty)
+        #expect(self.playerService.currentVideoQuality == nil)
+        #expect(self.playerService.videoQualityOptionsVideoId == nil)
+    }
+
+    @Test("resetTrackStatus also clears video quality options")
+    func resetTrackStatusClearsVideoQuality() {
+        self.playerService.videoQualityLevels = ["hd1080", "hd720"]
+        self.playerService.currentVideoQuality = "hd1080"
+
+        self.playerService.resetTrackStatus()
+
+        #expect(self.playerService.videoQualityLevels.isEmpty)
+        #expect(self.playerService.currentVideoQuality == nil)
+    }
+
+    @Test("YouTubeQuality.displayName maps the levels the music player reports")
+    func qualityDisplayNamesMapMusicLevels() {
+        // The runtime probe confirmed music's #movie_player reports exactly
+        // these identifiers; the display helper is shared with the YouTube side.
+        #expect(YouTubeQuality.displayName(for: "hd720") == "720p")
+        #expect(YouTubeQuality.displayName(for: "large") == "480p")
+        #expect(YouTubeQuality.displayName(for: "medium") == "360p")
+        #expect(YouTubeQuality.displayName(for: "small") == "240p")
+        #expect(YouTubeQuality.displayName(for: "tiny") == "144p")
+        #expect(YouTubeQuality.displayName(for: "auto") == String(localized: "Auto"))
+    }
+
+    // MARK: - Video Quality Discovery Tests
+
+    private func makeVideoSong(_ videoId: String) -> Song {
+        Song(
+            id: videoId,
+            title: "Song \(videoId)",
+            artists: [],
+            album: nil,
+            duration: 180,
+            thumbnailURL: nil,
+            videoId: videoId,
+            hasVideo: true
+        )
+    }
+
+    @Test("Discovery fetches the current video's levels once, latching on success")
+    func discoveryFetchesAndLatches() async {
+        let source = MockMusicVideoQualitySource()
+        source.levels = ["hd1080", "hd720", "auto"]
+        source.current = "hd720"
+        self.playerService.videoQualitySource = source
+        self.playerService.currentTrack = self.makeVideoSong("abc")
+        self.playerService.showVideo = true
+
+        await self.playerService.refreshVideoQualityOptionsIfNeeded()
+        #expect(self.playerService.videoQualityLevels == ["hd1080", "hd720", "auto"])
+        #expect(self.playerService.currentVideoQuality == "hd720")
+        #expect(self.playerService.videoQualityOptionsVideoId == "abc")
+
+        // Idempotent: a second call for the same video does not re-fetch.
+        await self.playerService.refreshVideoQualityOptionsIfNeeded()
+        #expect(source.availableCallCount == 1)
+    }
+
+    @Test("Track change while video mode stays open re-discovers levels")
+    func discoveryFollowsTrackChange() async {
+        let source = MockMusicVideoQualitySource()
+        source.levels = ["hd720", "auto"]
+        self.playerService.videoQualitySource = source
+        self.playerService.showVideo = true
+        self.playerService.currentTrack = self.makeVideoSong("first")
+
+        await self.playerService.refreshVideoQualityOptionsIfNeeded()
+        #expect(self.playerService.videoQualityOptionsVideoId == "first")
+
+        // Simulate the next song: resetTrackStatus clears state, track changes.
+        self.playerService.resetTrackStatus()
+        #expect(self.playerService.videoQualityLevels.isEmpty)
+        source.levels = ["hd1080", "hd720", "auto"]
+        self.playerService.currentTrack = self.makeVideoSong("second")
+
+        await self.playerService.refreshVideoQualityOptionsIfNeeded()
+        #expect(self.playerService.videoQualityLevels == ["hd1080", "hd720", "auto"])
+        #expect(self.playerService.videoQualityOptionsVideoId == "second")
+        #expect(source.availableCallCount == 2)
+    }
+
+    @Test("Empty levels (player not ready) do not latch and can retry")
+    func discoveryRetriesAfterEmpty() async {
+        let source = MockMusicVideoQualitySource()
+        source.levels = [] // player not ready yet
+        self.playerService.videoQualitySource = source
+        self.playerService.showVideo = true
+        self.playerService.currentTrack = self.makeVideoSong("abc")
+
+        await self.playerService.refreshVideoQualityOptionsIfNeeded()
+        #expect(self.playerService.videoQualityLevels.isEmpty)
+        // Guard NOT latched, so a later call retries the same video.
+        #expect(self.playerService.videoQualityOptionsVideoId == nil)
+
+        source.levels = ["hd720", "auto"] // player now ready
+        await self.playerService.refreshVideoQualityOptionsIfNeeded()
+        #expect(self.playerService.videoQualityLevels == ["hd720", "auto"])
+        #expect(self.playerService.videoQualityOptionsVideoId == "abc")
+        #expect(source.availableCallCount == 2)
+    }
+
+    @Test("Discovery is a no-op when video mode is closed")
+    func discoverySkippedWhenVideoClosed() async {
+        let source = MockMusicVideoQualitySource()
+        source.levels = ["hd720"]
+        self.playerService.videoQualitySource = source
+        self.playerService.currentTrack = self.makeVideoSong("abc")
+        self.playerService.showVideo = false
+
+        await self.playerService.refreshVideoQualityOptionsIfNeeded()
+        #expect(self.playerService.videoQualityLevels.isEmpty)
+        #expect(source.availableCallCount == 0)
+    }
+}
+
+// MARK: - MockMusicVideoQualitySource
+
+/// Records quality-source calls so discovery logic can be tested headlessly.
+@MainActor
+private final class MockMusicVideoQualitySource: MusicVideoQualitySource {
+    var levels: [String] = []
+    var current: String?
+    private(set) var availableCallCount = 0
+    private(set) var setLevels: [String] = []
+
+    func availableQualityLevels() async -> [String] {
+        self.availableCallCount += 1
+        return self.levels
+    }
+
+    func currentQualityLevel() async -> String? {
+        self.current
+    }
+
+    func setQualityLevel(_ level: String) {
+        self.setLevels.append(level)
     }
 }

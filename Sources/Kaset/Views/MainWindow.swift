@@ -235,9 +235,19 @@ struct MainWindow: View {
                     playerService: self.playerService,
                     webKitManager: self.webKitManager
                 )
+                // Video mode just opened: discover the resolution levels the
+                // player offers for the current video (idempotent; retries if
+                // the player isn't ready yet).
+                Task { await self.playerService.refreshVideoQualityOptionsIfNeeded() }
             } else {
                 VideoWindowController.shared.close()
             }
+        }
+        .onChange(of: self.playerService.currentTrack?.videoId) { _, _ in
+            // The track can change while video mode stays open; re-discover the
+            // new video's quality levels (resetTrackStatus cleared the old ones).
+            guard self.playerService.showVideo else { return }
+            Task { await self.playerService.refreshVideoQualityOptionsIfNeeded() }
         }
         .onChange(of: self.accountService.currentAccount?.id) { _, newAccountId in
             self.playerService.resetTrackStatus()

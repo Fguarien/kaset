@@ -293,12 +293,7 @@ extension YouTubeWatchWebView {
     /// Resumes playback.
     func play() {
         self.webView?.evaluateJavaScript(
-            """
-            (function() {
-                const video = document.querySelector('#movie_player video') || document.querySelector('video');
-                if (video && video.paused) { video.play(); }
-            })();
-            """,
+            WebPlayerScripts.play(.youTube),
             completionHandler: nil
         )
     }
@@ -306,12 +301,7 @@ extension YouTubeWatchWebView {
     /// Pauses playback.
     func pause() {
         self.webView?.evaluateJavaScript(
-            """
-            (function() {
-                const video = document.querySelector('#movie_player video') || document.querySelector('video');
-                if (video && !video.paused) { video.pause(); }
-            })();
-            """,
+            WebPlayerScripts.pause(.youTube),
             completionHandler: nil
         )
     }
@@ -320,12 +310,7 @@ extension YouTubeWatchWebView {
     func seek(to time: Double) {
         guard time.isFinite, time >= 0 else { return }
         self.webView?.evaluateJavaScript(
-            """
-            (function() {
-                const video = document.querySelector('#movie_player video') || document.querySelector('video');
-                if (video) { video.currentTime = \(time); }
-            })();
-            """,
+            WebPlayerScripts.seek(to: time, element: .youTube),
             completionHandler: nil
         )
     }

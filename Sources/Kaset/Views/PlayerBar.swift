@@ -763,6 +763,12 @@ struct PlayerBar: View {
             .accessibilityLabel(String(localized: "Video"))
             .accessibilityValue(self.playerService.showVideo ? String(localized: "Playing") : String(localized: "Off"))
             .disabled(self.playerService.currentTrack == nil || !self.playerService.currentTrackHasVideo)
+
+            // Resolution picker — only while video mode is active and the
+            // player has reported selectable levels.
+            if self.playerService.showVideo, !self.playerService.videoQualityLevels.isEmpty {
+                self.videoQualityMenu(self.playerService)
+            }
         }
     }
 
