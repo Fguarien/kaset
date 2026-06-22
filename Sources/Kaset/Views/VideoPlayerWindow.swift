@@ -44,9 +44,11 @@ struct VideoPlayerWindow: View {
                 .background(.black.opacity(0.55), in: .circle)
         }
         .buttonStyle(.plain)
-        .keyboardShortcut("f", modifiers: [.control, .command])
         .help(String(localized: "Enter Full Screen"))
         .accessibilityLabel(String(localized: "Toggle full screen video"))
+        // Note: the ⌃⌘F key equivalent lives on the app's Playback menu
+        // (KasetApp), not here — this window is shown non-key (orderFront), so a
+        // shortcut attached to this button would not fire until it gained focus.
     }
 }
 

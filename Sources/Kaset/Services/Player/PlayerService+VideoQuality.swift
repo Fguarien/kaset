@@ -59,9 +59,10 @@ extension PlayerService {
         guard self.videoQualityOptionsVideoId != videoId else { return }
 
         // We're about to probe a different video than whatever is currently
-        // displayed: drop the previous video's levels now so the menu doesn't
-        // show stale resolutions while the new page loads.
-        self.clearDisplayedQualityLevels()
+        // displayed: drop the previous video's levels and fetch guard now so the
+        // menu doesn't show stale resolutions while the new page loads, and a
+        // previously-fetched video stays eligible for rediscovery.
+        self.resetVideoQualityOptions()
 
         for attempt in 0 ..< 3 {
             // Confirm the player has actually navigated to the requested video
@@ -104,16 +105,11 @@ extension PlayerService {
         HapticService.toggle()
     }
 
-    /// Clears the currently displayed levels/selection without touching the
-    /// per-video fetch guard. Used when starting discovery for a new video so a
-    /// skip doesn't leave the previous video's resolutions on screen.
-    func clearDisplayedQualityLevels() {
-        self.videoQualityLevels = []
-        self.currentVideoQuality = nil
-    }
-
-    /// Fully clears per-track quality state, including the fetch guard.
-    /// Called when video playback stops or the active video changes.
+    /// Fully clears per-track quality state, including the fetch guard, so the
+    /// next discovery for any video (including one whose options were previously
+    /// fetched) re-probes rather than short-circuiting. Called when starting
+    /// discovery for a new video, when the active video changes, and when video
+    /// playback stops.
     func resetVideoQualityOptions() {
         self.videoQualityLevels = []
         self.currentVideoQuality = nil

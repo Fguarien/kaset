@@ -387,6 +387,58 @@ struct VideoSupportTests {
         #expect(self.playerService.videoQualityLevels == ["hd720", "auto"])
         #expect(self.playerService.videoQualityOptionsVideoId == "abc")
     }
+
+    @Test("Returning to a previously-fetched video re-discovers after a failed skip")
+    func returnToVideoAfterFailedSkipRediscovers() async {
+        let source = MockMusicVideoQualitySource()
+        source.levels = ["hd1080", "hd720", "auto"]
+        source.loadedId = "A"
+        self.playerService.videoQualitySource = source
+        self.playerService.showVideo = true
+
+        // Video A latches its options.
+        self.playerService.currentTrack = self.makeVideoSong("A")
+        await self.playerService.refreshVideoQualityOptionsIfNeeded()
+        #expect(self.playerService.videoQualityOptionsVideoId == "A")
+
+        // Skip to B, which never becomes ready (page stays on A / reports empty).
+        source.loadedId = "A" // page hasn't navigated to B
+        source.levels = []
+        self.playerService.currentTrack = self.makeVideoSong("B")
+        await self.playerService.refreshVideoQualityOptionsIfNeeded()
+        #expect(self.playerService.videoQualityLevels.isEmpty)
+        // Guard was reset when probing B, so it is NOT stuck on "A".
+        #expect(self.playerService.videoQualityOptionsVideoId == nil)
+
+        // Return to A while video mode is still open — it must re-discover.
+        source.loadedId = "A"
+        source.levels = ["hd1080", "hd720", "auto"]
+        self.playerService.currentTrack = self.makeVideoSong("A")
+        await self.playerService.refreshVideoQualityOptionsIfNeeded()
+        #expect(self.playerService.videoQualityLevels == ["hd1080", "hd720", "auto"])
+        #expect(self.playerService.videoQualityOptionsVideoId == "A")
+    }
+
+    @Test("Quality state resets when the track goes nil via resetVideoQualityOptions")
+    func nilTrackClearsQuality() async {
+        let source = MockMusicVideoQualitySource()
+        source.levels = ["hd720", "auto"]
+        source.loadedId = "abc"
+        self.playerService.videoQualitySource = source
+        self.playerService.showVideo = true
+        self.playerService.currentTrack = self.makeVideoSong("abc")
+        await self.playerService.refreshVideoQualityOptionsIfNeeded()
+        #expect(!self.playerService.videoQualityLevels.isEmpty)
+
+        // stop() nils currentTrack while video mode stays open; MainWindow's
+        // nil-videoId branch calls resetVideoQualityOptions (exercised directly
+        // here) so the stale picker doesn't linger with no active track.
+        self.playerService.resetVideoQualityOptions()
+
+        #expect(self.playerService.videoQualityLevels.isEmpty)
+        #expect(self.playerService.currentVideoQuality == nil)
+        #expect(self.playerService.videoQualityOptionsVideoId == nil)
+    }
 }
 
 // MARK: - MockMusicVideoQualitySource
