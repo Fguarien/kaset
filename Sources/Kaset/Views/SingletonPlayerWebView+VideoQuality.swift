@@ -9,7 +9,7 @@ import WebKit
 /// from `YouTubeWatchWebView+Scripts.swift`. A runtime probe confirmed the music
 /// player exposes real levels (`hd720/large/medium/small/tiny/auto`) and that
 /// `setPlaybackQualityRange` actually changes the resolution (not a no-op).
-/// See ADR-0023.
+/// See ADR-0024.
 ///
 /// Captions are deliberately NOT ported: the same probe found the music
 /// `WEB_REMIX` player returns empty caption tracklists for OMVs.

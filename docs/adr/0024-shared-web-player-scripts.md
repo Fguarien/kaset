@@ -1,4 +1,4 @@
-# ADR-0023: Shared Web-Player Scripts Across Music and YouTube Playback
+# ADR-0024: Shared Web-Player Scripts Across Music and YouTube Playback
 
 ## Status
 

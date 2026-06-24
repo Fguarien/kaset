@@ -11,7 +11,7 @@ import WebKit
 /// commands, models, and clients — because their DOM and InnerTube origins
 /// genuinely differ. The few primitives that operate on a generic HTML
 /// `<video>` element (and the WebView hosting it) are *not* origin-specific,
-/// so they live here as one source of truth. See ADR-0023.
+/// so they live here as one source of truth. See ADR-0024.
 nonisolated enum WebPlayerScripts {
     /// Clamps a desired playback volume into the valid `0...1` range, mapping
     /// non-finite input (NaN/∞) to full volume. Both playback paths share this

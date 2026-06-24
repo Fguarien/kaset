@@ -70,7 +70,7 @@ final class VideoWindowController {
         // macOS fullscreen rather than just zooming. This replaces the prior
         // .fullScreenAuxiliary/.canJoinAllSpaces behavior — the window no
         // longer floats over other apps' fullscreen spaces, the accepted
-        // tradeoff for a proper fullscreen video experience (ADR-0023 follow-up).
+        // tradeoff for a proper fullscreen video experience (ADR-0024 follow-up).
         window.collectionBehavior = [.fullScreenPrimary]
         window.aspectRatio = NSSize(width: 16, height: 9)
         window.minSize = NSSize(width: 160, height: 90)

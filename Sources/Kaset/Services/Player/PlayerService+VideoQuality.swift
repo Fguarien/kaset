@@ -33,7 +33,7 @@ extension SingletonPlayerWebView: MusicVideoQualitySource {
 /// Parallels the YouTube side's quality handling (`YouTubePlayerService`), but
 /// drives the music `SingletonPlayerWebView`'s `#movie_player`. Only meaningful
 /// while `showVideo` is active; audio-only playback reports no levels. See
-/// ADR-0023.
+/// ADR-0024.
 ///
 /// Discovery is keyed to the active `videoId` (mirroring
 /// `YouTubePlayerService.updatePlaybackState`), not to the video-window-open

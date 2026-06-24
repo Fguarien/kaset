@@ -5,7 +5,7 @@ import WebKit
 // MARK: - WebPlayerScriptsTests
 
 /// Locks the output of the shared playback-script builders so the music and
-/// YouTube paths that compose from them cannot silently drift. See ADR-0023.
+/// YouTube paths that compose from them cannot silently drift. See ADR-0024.
 @Suite("WebPlayerScripts", .tags(.service))
 @MainActor
 struct WebPlayerScriptsTests {
