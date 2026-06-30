@@ -19,6 +19,7 @@ struct YouTubePlayerBar: View {
     private static let compactVideoDetailsWidth: CGFloat = 141
 
     @Environment(YouTubePlayerService.self) private var youtubePlayer
+    @Environment(YouTubeViewModelStore.self) private var youtubeStore: YouTubeViewModelStore?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
 
@@ -27,6 +28,7 @@ struct YouTubePlayerBar: View {
 
     @State private var seekValue: Double = 0
     @State private var isSeeking = false
+    @State private var seekHold = PlayerBarSeekHold()
     @State private var volumeValue: Double = 1.0
     @State private var isAdjustingVolume = false
     @State private var showsVolumeOverlay = false
@@ -62,9 +64,19 @@ struct YouTubePlayerBar: View {
             self.playerAreaFade
         }
         .onChange(of: self.youtubePlayer.progress) { _, newValue in
-            if !self.isSeeking, self.youtubePlayer.duration > 0 {
-                self.seekValue = newValue / self.youtubePlayer.duration
+            self.seekHold.reconcile(observedProgress: newValue)
+            if !self.isSeeking, !self.seekHold.isActive, self.youtubePlayer.duration > 0 {
+                self.seekValue = self.displayedPlaybackProgress / self.youtubePlayer.duration
             }
+        }
+        .onChange(of: self.youtubePlayer.duration) { _, newValue in
+            self.seekHold.reconcile(observedProgress: self.youtubePlayer.progress)
+            if !self.isSeeking, !self.seekHold.isActive, newValue > 0 {
+                self.seekValue = self.displayedPlaybackProgress / newValue
+            }
+        }
+        .onChange(of: self.currentSeekIdentity) { _, _ in
+            self.clearSeekHold()
         }
         .onChange(of: self.youtubePlayer.volume) { _, newValue in
             if !self.isAdjustingVolume {
@@ -99,24 +111,35 @@ struct YouTubePlayerBar: View {
 
     private func videoDetailsSection(usesCompactDetails: Bool) -> some View {
         HStack(spacing: 8) {
-            CachedAsyncImage(
-                url: self.youtubePlayer.currentVideo?.thumbnailURL,
-                targetSize: CGSize(width: 128, height: 72)
-            ) { image in
-                image
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-            } placeholder: {
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(.quaternary)
-                    .overlay {
-                        Image(systemName: "play.rectangle")
-                            .font(.system(size: 16))
-                            .foregroundStyle(.secondary)
-                    }
+            PlayerBarArtworkView(
+                width: 57,
+                height: 32,
+                cornerRadius: 6,
+                glowSources: self.currentVideoGlowSources,
+                glowIdentity: self.currentVideoGlowIdentity,
+                glowTargetSize: CGSize(width: 128, height: 72),
+                showsHoverOverlay: false
+            ) {
+                CachedAsyncImage(
+                    url: self.youtubePlayer.currentVideo?.thumbnailURL,
+                    targetSize: CGSize(width: 128, height: 72)
+                ) { image in
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                } placeholder: {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(.quaternary)
+                        .overlay {
+                            Image(systemName: "play.rectangle")
+                                .font(.system(size: 16))
+                                .foregroundStyle(.secondary)
+                        }
+                }
+                .frame(width: 57, height: 32)
+                .clipShape(.rect(cornerRadius: 6, style: .continuous))
             }
-            .frame(width: 57, height: 32)
-            .clipShape(.rect(cornerRadius: 6, style: .continuous))
+            .accessibilityHidden(self.youtubePlayer.currentVideo == nil)
 
             if !usesCompactDetails {
                 VStack(alignment: .leading, spacing: 4) {
@@ -127,12 +150,13 @@ struct YouTubePlayerBar: View {
                         height: 13,
                         reduceMotion: self.reduceMotion
                     )
+                    .id(self.currentTitleIdentity)
 
-                    Text(self.youtubePlayer.currentVideo?.channelName ?? String(localized: "YouTube"))
-                        .font(.system(size: 12))
-                        .lineLimit(1)
-                        .frame(height: 12, alignment: .leading)
-                        .foregroundStyle(.secondary)
+                    PlayerBarMetadataButton(
+                        text: self.youtubePlayer.currentVideo?.channelName ?? String(localized: "YouTube"),
+                        isEnabled: self.canNavigateToCurrentChannel,
+                        action: self.openCurrentChannel
+                    )
                 }
                 .frame(width: 129, height: 29, alignment: .leading)
             }
@@ -183,15 +207,48 @@ struct YouTubePlayerBar: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
     }
 
+    private var currentVideoGlowSources: [URL] {
+        guard let video = self.youtubePlayer.currentVideo else { return [] }
+        return self.uniqueURLs([
+            self.fallbackThumbnailURL(for: video.videoId),
+            video.thumbnailURL,
+        ])
+    }
+
+    private var currentVideoGlowIdentity: String? {
+        guard let video = self.youtubePlayer.currentVideo else { return nil }
+        return video.videoId
+    }
+
+    private func fallbackThumbnailURL(for videoId: String) -> URL? {
+        URL(string: "https://i.ytimg.com/vi/\(videoId)/mqdefault.jpg")
+    }
+
+    private func uniqueURLs(_ urls: [URL?]) -> [URL] {
+        var seen = Set<URL>()
+        return urls.compactMap { url in
+            guard let url, seen.insert(url).inserted else { return nil }
+            return url
+        }
+    }
+
+    private var currentTitleIdentity: String {
+        [
+            self.youtubePlayer.currentVideo?.id ?? "none",
+            self.youtubePlayer.currentVideo?.title ?? "none",
+        ].joined(separator: "|")
+    }
+
     private var youtubeProgressSection: some View {
         ZStack(alignment: .top) {
             PlayerBarProgressLane(
                 fraction: self.displayFraction,
                 accent: Self.brandAccent,
-                elapsedText: Self.formatTime(self.isSeeking ? self.seekValue * self.youtubePlayer.duration : self.youtubePlayer.progress),
-                remainingText: "-\(Self.formatTime(max(0, self.youtubePlayer.duration - (self.isSeeking ? self.seekValue * self.youtubePlayer.duration : self.youtubePlayer.progress))))",
+                elapsedText: Self.formatTime(self.progressTextValue),
+                remainingText: "-\(Self.formatTime(max(0, self.youtubePlayer.duration - self.progressTextValue)))",
                 isLive: false,
                 canSeek: self.canSeek,
+                isLoading: self.isProgressLoading,
                 onScrub: { fraction in
                     self.isSeeking = true
                     self.seekValue = fraction
@@ -424,7 +481,7 @@ struct YouTubePlayerBar: View {
 
                 PlayerBarVerticalSlider(
                     value: self.$volumeValue,
-                    accent: self.volumeSliderTint,
+                    accent: Self.brandAccent,
                     accessibilityIdentifier: nil,
                     accessibilityLabel: String(localized: "Volume"),
                     onEditingChanged: { editing in
@@ -463,10 +520,6 @@ struct YouTubePlayerBar: View {
         self.colorScheme == .dark ? .white.opacity(0.10) : .black.opacity(0.06)
     }
 
-    private var volumeSliderTint: Color {
-        self.colorScheme == .dark ? .white.opacity(0.85) : .black.opacity(0.72)
-    }
-
     private var volumeOverlayShadow: Color {
         self.colorScheme == .dark ? .black.opacity(0.36) : .black.opacity(0.18)
     }
@@ -481,7 +534,19 @@ struct YouTubePlayerBar: View {
             return min(max(0, self.seekValue), 1)
         }
         guard self.youtubePlayer.duration > 0 else { return 0 }
-        return min(max(0, self.youtubePlayer.progress / self.youtubePlayer.duration), 1)
+        return min(max(0, self.displayedPlaybackProgress / self.youtubePlayer.duration), 1)
+    }
+
+    private var progressTextValue: TimeInterval {
+        self.isSeeking ? self.seekValue * self.youtubePlayer.duration : self.displayedPlaybackProgress
+    }
+
+    private var displayedPlaybackProgress: TimeInterval {
+        self.seekHold.displayProgress(observedProgress: self.youtubePlayer.progress)
+    }
+
+    private var currentSeekIdentity: String {
+        self.youtubePlayer.currentVideo?.videoId ?? "none"
     }
 
     /// Seeking is unavailable during ads or before a duration is known.
@@ -489,10 +554,53 @@ struct YouTubePlayerBar: View {
         self.youtubePlayer.duration > 0 && !self.youtubePlayer.isShowingAd
     }
 
+    private var isProgressLoading: Bool {
+        self.youtubePlayer.isPlaybackLoading
+    }
+
+    private var canNavigateToCurrentChannel: Bool {
+        self.youtubeStore != nil && self.currentChannelId != nil
+    }
+
+    private var currentChannelId: String? {
+        guard let channelId = self.youtubePlayer.currentVideo?.channelId, !channelId.isEmpty else {
+            return nil
+        }
+        return channelId
+    }
+
+    private func openCurrentChannel() {
+        guard let channelId = self.currentChannelId else { return }
+        self.youtubeStore?.navigationPath.append(YouTubeRoute.channel(channelId: channelId))
+    }
+
     private func performSeek() {
         guard self.isSeeking else { return }
-        self.youtubePlayer.seek(to: self.seekValue * self.youtubePlayer.duration)
+        let seekTime = self.seekValue * self.youtubePlayer.duration
+        let holdID = self.seekHold.begin(target: seekTime)
         self.isSeeking = false
+        self.youtubePlayer.seek(to: seekTime)
+
+        Task { @MainActor in
+            try? await Task.sleep(for: PlayerBarSeekHold.timeout)
+            if self.seekHold.clearIfCurrent(holdID) {
+                self.syncSeekValueFromDisplayedProgress()
+            }
+        }
+    }
+
+    private func clearSeekHold() {
+        self.seekHold.clear()
+        self.isSeeking = false
+        self.syncSeekValueFromDisplayedProgress()
+    }
+
+    private func syncSeekValueFromDisplayedProgress() {
+        if self.youtubePlayer.duration > 0 {
+            self.seekValue = self.displayedPlaybackProgress / self.youtubePlayer.duration
+        } else {
+            self.seekValue = 0
+        }
     }
 
     private var volumeIcon: String {

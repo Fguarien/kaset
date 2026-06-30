@@ -1,9 +1,11 @@
 import SwiftUI
 
+// swiftlint:disable file_length
+
 // MARK: - PlayerBar
 
 /// Player bar shown at the bottom of the content area, styled like Apple Music with Liquid Glass.
-struct PlayerBar: View {
+struct PlayerBar: View { // swiftlint:disable:this type_body_length
     private static let brandAccent = PackageResourceLookup.brandAccent
     private static let fullSongInfoWidth: CGFloat = 234
     private static let compactSongInfoWidth: CGFloat = 116
@@ -13,6 +15,9 @@ struct PlayerBar: View {
     @Environment(SongLikeStatusManager.self) private var likeStatusManager
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.playerBarNavigationAction) private var navigationAction
+    @Environment(\.playerBarCurrentAlbumID) private var currentRouteAlbumID
+    @Environment(\.playerBarCurrentArtistID) private var currentRouteArtistID
 
     /// Namespace for glass effect morphing and unioning.
     @Namespace private var playerNamespace
@@ -20,11 +25,16 @@ struct PlayerBar: View {
     /// Local seek value for smooth slider dragging without network calls on every change.
     @State private var seekValue: Double = 0
     @State private var isSeeking = false
+    @State private var seekHold = PlayerBarSeekHold()
 
     /// Local volume value for smooth slider dragging.
     @State private var volumeValue: Double = 1.0
     @State private var isAdjustingVolume = false
     @State private var showsVolumeOverlay = false
+    @State private var resolvedArtist: Artist?
+    @State private var resolvedAlbum: Playlist?
+    @State private var isResolvingArtist = false
+    @State private var isResolvingAlbum = false
 
     /// Cached formatted progress string to avoid repeated formatting.
     @State private var formattedProgress: String = "0:00"
@@ -66,23 +76,33 @@ struct PlayerBar: View {
             self.keyboardShortcuts
         }
         .zIndex(1)
+        .task(id: self.currentTitleIdentity) {
+            await self.prepareCurrentNavigationTargets()
+        }
         .onChange(of: self.playerService.progress) { _, newValue in
-            if !self.isSeeking, self.playerService.duration > 0 {
-                self.seekValue = newValue / self.playerService.duration
+            self.seekHold.reconcile(observedProgress: newValue)
+            let displayProgress = self.displayProgress(observedProgress: newValue)
+
+            if !self.isSeeking, !self.seekHold.isActive, self.playerService.duration > 0 {
+                self.seekValue = displayProgress / self.playerService.duration
             }
 
-            let currentSecond = Int(newValue)
+            let currentSecond = Int(displayProgress)
             if currentSecond != self.lastProgressSecond {
                 self.lastProgressSecond = currentSecond
-                self.formattedProgress = self.formatTime(newValue)
-                self.formattedRemaining = "-\(self.formatTime(max(0, self.playerService.duration - newValue)))"
+                self.updateFormattedTimes(progress: displayProgress, duration: self.playerService.duration)
             }
         }
         .onChange(of: self.playerService.duration) { _, newValue in
-            if !self.isSeeking, newValue > 0 {
-                self.seekValue = self.playerService.progress / newValue
+            self.seekHold.reconcile(observedProgress: self.playerService.progress)
+            let displayProgress = self.displayedPlaybackProgress
+            if !self.isSeeking, !self.seekHold.isActive, newValue > 0 {
+                self.seekValue = displayProgress / newValue
             }
-            self.formattedRemaining = "-\(self.formatTime(max(0, newValue - self.playerService.progress)))"
+            self.updateFormattedTimes(progress: displayProgress, duration: newValue)
+        }
+        .onChange(of: self.currentSeekIdentity) { _, _ in
+            self.clearSeekHold()
         }
         .onChange(of: self.playerService.volume) { _, newValue in
             if !self.isAdjustingVolume {
@@ -175,17 +195,68 @@ struct PlayerBar: View {
     @ViewBuilder
     private var thumbnailView: some View {
         if let track = self.playerService.currentTrack {
-            SongThumbnailView(song: track, size: 32, cornerRadius: 6)
-                .accessibilityIdentifier(AccessibilityID.PlayerBar.thumbnail)
-        } else {
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(.quaternary)
-                .overlay {
-                    CassetteIcon(size: 18)
-                        .foregroundStyle(.secondary)
+            if self.canOpenCurrentAlbum {
+                Button {
+                    self.openCurrentAlbum()
+                } label: {
+                    self.trackArtwork(for: track)
                 }
-                .frame(width: 32, height: 32)
+                .buttonStyle(.plain)
                 .accessibilityIdentifier(AccessibilityID.PlayerBar.thumbnail)
+                .accessibilityLabel(Text("Go to Album"))
+            } else {
+                self.trackArtwork(for: track)
+                    .accessibilityIdentifier(AccessibilityID.PlayerBar.thumbnail)
+            }
+        } else {
+            PlayerBarArtworkView(
+                width: 32,
+                height: 32,
+                cornerRadius: 6,
+                showsHoverOverlay: false
+            ) {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(.quaternary)
+                    .overlay {
+                        CassetteIcon(size: 18)
+                            .foregroundStyle(.secondary)
+                    }
+            }
+            .accessibilityIdentifier(AccessibilityID.PlayerBar.thumbnail)
+        }
+    }
+
+    private func trackArtwork(for track: Song) -> some View {
+        PlayerBarArtworkView(
+            width: 32,
+            height: 32,
+            cornerRadius: 6,
+            glowSources: self.artworkGlowSources(for: track),
+            glowIdentity: self.artworkGlowIdentity(for: track),
+            glowTargetSize: CGSize(width: 320, height: 320),
+            showsHoverOverlay: self.canOpenCurrentAlbum || self.showsCurrentAlbumHoverOnly,
+            isLoading: self.isResolvingAlbum
+        ) {
+            SongThumbnailView(song: track, size: 32, cornerRadius: 6)
+        }
+    }
+
+    private func artworkGlowSources(for track: Song) -> [URL] {
+        self.uniqueURLs([
+            track.fallbackThumbnailURL,
+            track.thumbnailURL?.highQualityThumbnailURL,
+        ])
+    }
+
+    private func artworkGlowIdentity(for track: Song) -> String {
+        track.videoId
+    }
+
+    private func uniqueURLs(_ urls: [URL?]) -> [URL] {
+        var seen = Set<URL>()
+        return urls.compactMap { url in
+            guard let url, seen.insert(url).inserted else { return nil }
+            return url
         }
     }
 
@@ -198,16 +269,90 @@ struct PlayerBar: View {
                 height: 13,
                 reduceMotion: self.reduceMotion
             )
+            .id(self.currentTitleIdentity)
             .accessibilityIdentifier(AccessibilityID.PlayerBar.trackTitle)
 
-            Text(self.artistName)
-                .font(.system(size: 12))
-                .lineLimit(1)
-                .frame(height: 12, alignment: .leading)
-                .foregroundStyle(.secondary)
-                .accessibilityIdentifier(AccessibilityID.PlayerBar.trackArtist)
+            PlayerBarMetadataButton(
+                text: self.artistName,
+                isEnabled: self.canOpenCurrentArtist,
+                isLoading: self.isResolvingArtist,
+                accessibilityIdentifier: AccessibilityID.PlayerBar.trackArtist,
+                action: self.openCurrentArtist
+            )
         }
         .frame(height: 29, alignment: .leading)
+    }
+
+    private var currentTitleIdentity: String {
+        [
+            self.playerService.currentTrack?.videoId ?? "none",
+            self.playerService.currentTrack?.title ?? "none",
+        ].joined(separator: "|")
+    }
+
+    private var canOpenCurrentArtist: Bool {
+        self.playerService.currentTrack != nil
+            && self.navigationAction.openArtist != nil
+            && (self.currentArtistTarget != nil || (self.currentArtistSearchName != nil && self.playerService.ytMusicClient != nil))
+            && !self.isCurrentArtistTarget
+    }
+
+    private var canOpenCurrentAlbum: Bool {
+        self.playerService.currentTrack != nil
+            && self.navigationAction.openAlbum != nil
+            && (self.currentAlbumTarget != nil || (self.currentArtistSearchName != nil && self.playerService.ytMusicClient != nil))
+            && !self.isCurrentAlbumTarget
+            && !self.isResolvingCurrentRouteAlbum
+    }
+
+    private var currentArtistTarget: Artist? {
+        self.primaryNavigableArtist ?? self.resolvedArtist
+    }
+
+    private var currentAlbumTarget: Playlist? {
+        self.currentAlbumPlaylist ?? self.resolvedAlbum
+    }
+
+    private var isCurrentAlbumTarget: Bool {
+        guard let currentRouteAlbumID,
+              let album = self.currentAlbumTarget
+        else { return false }
+
+        return album.id == currentRouteAlbumID
+    }
+
+    private var showsCurrentAlbumHoverOnly: Bool {
+        self.isCurrentAlbumTarget || self.isResolvingCurrentRouteAlbum
+    }
+
+    private var isResolvingCurrentRouteAlbum: Bool {
+        self.currentRouteAlbumID != nil && self.currentAlbumTarget == nil
+    }
+
+    private var isCurrentArtistTarget: Bool {
+        guard let currentRouteArtistID,
+              let artist = self.currentArtistTarget
+        else { return false }
+
+        return artist.id == currentRouteArtistID || artist.publicChannelId == currentRouteArtistID
+    }
+
+    private var currentAlbumPlaylist: Playlist? {
+        guard let track = self.playerService.currentTrack,
+              let album = track.album,
+              album.hasNavigableId
+        else { return nil }
+
+        return self.playlist(from: album, track: track)
+    }
+
+    private var primaryNavigableArtist: Artist? {
+        self.playerService.currentTrack?.artists.first(where: { $0.hasNavigableId })
+    }
+
+    private var currentArtistSearchName: String? {
+        guard let track = self.playerService.currentTrack else { return nil }
+        return self.primaryArtistName(in: track)
     }
 
     private var artistName: String {
@@ -215,6 +360,17 @@ struct PlayerBar: View {
             return String(localized: "Kaset")
         }
         return track.artistsDisplay.isEmpty ? String(localized: "Unknown Artist") : track.artistsDisplay
+    }
+
+    private func playlist(from album: Album, track: Song) -> Playlist {
+        Playlist(
+            id: album.id,
+            title: album.title,
+            description: nil,
+            thumbnailURL: album.thumbnailURL ?? track.thumbnailURL,
+            trackCount: album.trackCount,
+            author: Artist.inline(name: album.artistsDisplay, namespace: "album-artist")
+        )
     }
 
     private var songActionButtons: some View {
@@ -272,6 +428,7 @@ struct PlayerBar: View {
                         : self.formattedRemaining,
                     isLive: self.playerService.isCurrentItemLive,
                     canSeek: self.canSeek,
+                    isLoading: self.isProgressLoading,
                     onScrub: { fraction in
                         self.isSeeking = true
                         self.seekValue = fraction
@@ -405,7 +562,7 @@ struct PlayerBar: View {
 
                 PlayerBarVerticalSlider(
                     value: self.$volumeValue,
-                    accent: self.volumeSliderTint,
+                    accent: Self.brandAccent,
                     accessibilityIdentifier: AccessibilityID.PlayerBar.volumeSlider,
                     accessibilityLabel: String(localized: "Volume"),
                     onEditingChanged: { editing in
@@ -448,10 +605,6 @@ struct PlayerBar: View {
         self.colorScheme == .dark ? .white.opacity(0.10) : .black.opacity(0.06)
     }
 
-    private var volumeSliderTint: Color {
-        self.colorScheme == .dark ? .white.opacity(0.85) : .black.opacity(0.72)
-    }
-
     private var volumeOverlayShadow: Color {
         self.colorScheme == .dark ? .black.opacity(0.36) : .black.opacity(0.18)
     }
@@ -460,6 +613,15 @@ struct PlayerBar: View {
         self.playerService.currentTrack != nil
             && self.playerService.duration > 0
             && !self.playerService.isCurrentItemLive
+    }
+
+    private var isProgressLoading: Bool {
+        switch self.playerService.state {
+        case .loading, .buffering:
+            self.playerService.currentTrack != nil
+        case .idle, .playing, .paused, .ended, .error:
+            false
+        }
     }
 
     private var canShowCurrentTrackVideo: Bool {
@@ -480,7 +642,19 @@ struct PlayerBar: View {
             return min(max(0, self.seekValue), 1)
         }
         guard self.playerService.duration > 0 else { return 0 }
-        return min(max(0, self.playerService.progress / self.playerService.duration), 1)
+        return min(max(0, self.displayedPlaybackProgress / self.playerService.duration), 1)
+    }
+
+    private var displayedPlaybackProgress: TimeInterval {
+        self.displayProgress(observedProgress: self.playerService.progress)
+    }
+
+    private func displayProgress(observedProgress: TimeInterval) -> TimeInterval {
+        self.seekHold.displayProgress(observedProgress: observedProgress)
+    }
+
+    private var currentSeekIdentity: String {
+        self.playerService.currentTrack?.videoId ?? "none"
     }
 
     // MARK: - Playback Options
@@ -650,22 +824,18 @@ struct PlayerBar: View {
             Divider()
         }
 
-        if let artist {
-            NavigationLink(value: artist) {
+        if let artist, self.navigationAction.openArtist != nil {
+            Button {
+                self.openArtist(artist)
+            } label: {
                 Label("Go to Artist", systemImage: "person")
             }
         }
 
-        if let album, album.hasNavigableId {
-            let playlist = Playlist(
-                id: album.id,
-                title: album.title,
-                description: nil,
-                thumbnailURL: album.thumbnailURL ?? track.thumbnailURL,
-                trackCount: album.trackCount,
-                author: Artist.inline(name: album.artistsDisplay, namespace: "album-artist")
-            )
-            NavigationLink(value: playlist) {
+        if let album, album.hasNavigableId, self.navigationAction.openAlbum != nil {
+            Button {
+                self.openAlbum(self.playlist(from: album, track: track))
+            } label: {
                 Label("Go to Album", systemImage: "square.stack")
             }
         }
@@ -707,6 +877,204 @@ struct PlayerBar: View {
     private func likeCurrentTrack() {
         HapticService.toggle()
         self.playerService.likeCurrentTrack()
+    }
+
+    private func prepareCurrentNavigationTargets() async {
+        self.resolvedArtist = nil
+        self.resolvedAlbum = nil
+        self.isResolvingArtist = false
+        self.isResolvingAlbum = false
+
+        guard self.playerService.currentTrack != nil,
+              let client = self.playerService.ytMusicClient
+        else { return }
+
+        let identity = self.currentTitleIdentity
+
+        if self.navigationAction.openArtist != nil,
+           self.primaryNavigableArtist == nil,
+           let artistName = self.currentArtistSearchName
+        {
+            let artist = await self.resolveArtist(named: artistName, client: client)
+            guard !Task.isCancelled, self.currentTitleIdentity == identity else { return }
+            self.resolvedArtist = artist
+        }
+
+        if self.navigationAction.openAlbum != nil,
+           self.currentAlbumPlaylist == nil,
+           self.currentArtistSearchName != nil,
+           let track = self.playerService.currentTrack
+        {
+            let album = await self.resolveAlbum(for: track, client: client)
+            guard !Task.isCancelled, self.currentTitleIdentity == identity else { return }
+            self.resolvedAlbum = album
+        }
+    }
+
+    private func openCurrentArtist() {
+        guard self.canOpenCurrentArtist else { return }
+        guard !self.isResolvingArtist else { return }
+        HapticService.toggle()
+
+        if let artist = self.currentArtistTarget {
+            self.openArtist(artist, playsHaptic: false)
+            return
+        }
+
+        guard let query = self.currentArtistSearchName else { return }
+        guard let client = self.playerService.ytMusicClient else { return }
+        let identity = self.currentTitleIdentity
+
+        self.isResolvingArtist = true
+
+        Task {
+            let artist = await self.resolveArtist(named: query, client: client)
+            guard !Task.isCancelled, self.currentTitleIdentity == identity else { return }
+            self.resolvedArtist = artist
+            self.isResolvingArtist = false
+
+            guard let artist, !self.isCurrentArtistTarget else { return }
+            self.openArtist(artist, playsHaptic: false)
+        }
+    }
+
+    private func openCurrentAlbum() {
+        guard self.canOpenCurrentAlbum else { return }
+        guard !self.isResolvingAlbum else { return }
+        HapticService.toggle()
+
+        if let album = self.currentAlbumTarget {
+            self.openAlbum(album, playsHaptic: false)
+            return
+        }
+
+        guard let track = self.playerService.currentTrack,
+              let client = self.playerService.ytMusicClient
+        else { return }
+
+        let identity = self.currentTitleIdentity
+        self.isResolvingAlbum = true
+
+        Task {
+            let album = await self.resolveAlbum(for: track, client: client)
+            guard !Task.isCancelled, self.currentTitleIdentity == identity else { return }
+            self.resolvedAlbum = album
+            self.isResolvingAlbum = false
+
+            guard let album else { return }
+            self.openAlbum(album, playsHaptic: false)
+        }
+    }
+
+    private func openArtist(_ artist: Artist, playsHaptic: Bool = true) {
+        if playsHaptic {
+            HapticService.toggle()
+        }
+        self.navigationAction.openArtist?(artist)
+    }
+
+    private func openAlbum(_ album: Playlist, playsHaptic: Bool = true) {
+        if playsHaptic {
+            HapticService.toggle()
+        }
+        self.navigationAction.openAlbum?(album)
+    }
+
+    private func resolveArtist(named name: String, client: any YTMusicClientProtocol) async -> Artist? {
+        guard let query = self.trimmedNonEmpty(name) else { return nil }
+
+        do {
+            let response = try await client.searchArtists(query: query)
+            return response.artists.first { artist in
+                artist.hasNavigableId && self.matchesSearchResultTitle(artist.name, query: query)
+            }
+        } catch {
+            DiagnosticsLogger.ui.error("Failed to resolve player bar artist: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    private func resolveAlbum(for track: Song, client: any YTMusicClientProtocol) async -> Playlist? {
+        if let album = track.album,
+           let playlist = await self.resolveAlbum(named: album.title, fallbackTrack: track, client: client)
+        {
+            return playlist
+        }
+
+        do {
+            guard let query = self.searchQuery(parts: [track.title, self.primaryArtistName(in: track)]) else { return nil }
+
+            let response = try await client.searchSongsWithPagination(query: query)
+            let matchedSong = response.songs.first { $0.videoId == track.videoId }
+                ?? response.songs.first { song in
+                    self.matchesSearchResultTitle(song.title, query: track.title)
+                        && self.matchesTrackArtist(song, fallbackTrack: track)
+                }
+
+            guard let album = matchedSong?.album, album.hasNavigableId else { return nil }
+            return self.playlist(from: album, track: matchedSong ?? track)
+        } catch {
+            DiagnosticsLogger.ui.error("Failed to resolve player bar album from song search: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    private func resolveAlbum(
+        named title: String,
+        fallbackTrack track: Song,
+        client: any YTMusicClientProtocol
+    ) async -> Playlist? {
+        guard let query = self.searchQuery(parts: [title, self.primaryArtistName(in: track)]),
+              let artistName = self.primaryArtistName(in: track)
+        else { return nil }
+
+        do {
+            let response = try await client.searchAlbums(query: query)
+            guard let album = response.albums.first(where: { album in
+                album.hasNavigableId
+                    && self.matchesSearchResultTitle(album.title, query: title)
+                    && self.matchesAlbumArtist(album, artistName: artistName)
+            }) else {
+                return nil
+            }
+
+            return self.playlist(from: album, track: track)
+        } catch {
+            DiagnosticsLogger.ui.error("Failed to resolve player bar album: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    private func primaryArtistName(in track: Song) -> String? {
+        track.artists.lazy.compactMap { self.trimmedNonEmpty($0.name) }.first
+    }
+
+    private func searchQuery(parts: [String?]) -> String? {
+        let query = parts.compactMap { part in
+            part.flatMap(self.trimmedNonEmpty)
+        }.joined(separator: " ")
+
+        return self.trimmedNonEmpty(query)
+    }
+
+    private func trimmedNonEmpty(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func matchesTrackArtist(_ song: Song, fallbackTrack track: Song) -> Bool {
+        guard let artistName = self.primaryArtistName(in: track) else { return false }
+        return song.artists.contains { self.matchesSearchResultTitle($0.name, query: artistName) }
+    }
+
+    private func matchesAlbumArtist(_ album: Album, artistName: String) -> Bool {
+        guard let artists = album.artists else { return false }
+        return artists.contains { self.matchesSearchResultTitle($0.name, query: artistName) }
+    }
+
+    private func matchesSearchResultTitle(_ title: String, query: String) -> Bool {
+        let normalizedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines).localizedCaseInsensitiveCompare(query)
+        return normalizedTitle == .orderedSame
     }
 
     private func dislikeCurrentTrack() {
@@ -761,10 +1129,46 @@ struct PlayerBar: View {
     private func performSeek() {
         guard self.isSeeking, self.playerService.duration > 0 else { return }
         let seekTime = self.seekValue * self.playerService.duration
+        let holdID = self.seekHold.begin(target: seekTime)
+        self.updateFormattedTimes(progress: seekTime, duration: self.playerService.duration)
+        self.isSeeking = false
+
         Task {
             await self.playerService.seek(to: seekTime)
-            self.isSeeking = false
         }
+        Task { @MainActor in
+            try? await Task.sleep(for: PlayerBarSeekHold.timeout)
+            if self.seekHold.clearIfCurrent(holdID) {
+                self.syncSeekValueFromDisplayedProgress()
+                self.updateFormattedTimes(
+                    progress: self.displayedPlaybackProgress,
+                    duration: self.playerService.duration
+                )
+            }
+        }
+    }
+
+    private func clearSeekHold() {
+        self.seekHold.clear()
+        self.isSeeking = false
+        self.syncSeekValueFromDisplayedProgress()
+        self.updateFormattedTimes(
+            progress: self.displayedPlaybackProgress,
+            duration: self.playerService.duration
+        )
+    }
+
+    private func syncSeekValueFromDisplayedProgress() {
+        if self.playerService.duration > 0 {
+            self.seekValue = self.displayedPlaybackProgress / self.playerService.duration
+        } else {
+            self.seekValue = 0
+        }
+    }
+
+    private func updateFormattedTimes(progress: TimeInterval, duration: TimeInterval) {
+        self.formattedProgress = self.formatTime(progress)
+        self.formattedRemaining = "-\(self.formatTime(max(0, duration - progress)))"
     }
 
     private func formatTime(_ seconds: TimeInterval) -> String {
