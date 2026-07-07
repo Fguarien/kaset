@@ -3,7 +3,6 @@ import SwiftUI
 // MARK: - PodcastsView
 
 /// Podcasts discovery view displaying podcast shows and episodes.
-@available(macOS 26.0, *)
 struct PodcastsView: View {
     @State var viewModel: PodcastsViewModel
     @Environment(PlayerService.self) private var playerService
@@ -39,10 +38,15 @@ struct PodcastsView: View {
             .navigationDestination(for: PodcastShow.self) { show in
                 PodcastShowView(show: show, client: self.viewModel.client)
             }
-            .navigationDestinations(client: self.viewModel.client)
+            .navigationDestinations(
+                client: self.viewModel.client,
+                playerBarNavigationAction: self.playerBarNavigationAction
+            )
+            .playerBarMusicNavigation(path: self.$navigationPath)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             PlayerBar()
+                .playerBarMusicNavigation(path: self.$navigationPath)
         }
         .onAppear {
             if self.viewModel.loadingState == .idle {
@@ -56,6 +60,13 @@ struct PodcastsView: View {
         }
     }
 
+    private var playerBarNavigationAction: PlayerBarNavigationAction {
+        PlayerBarNavigationAction(
+            openArtist: { self.navigationPath.append($0) },
+            openAlbum: { self.navigationPath.append($0) }
+        )
+    }
+
     // MARK: - Views
 
     private var contentView: some View {
@@ -65,24 +76,23 @@ struct PodcastsView: View {
                     self.sectionView(section)
                 }
             }
-            .padding(.horizontal, 24)
+            // Edge-to-edge so shelves slide under the glass sidebar; resting
+            // inset is restored per-shelf via contentInset.
             .padding(.vertical, 20)
         }
     }
 
     private func sectionView(_ section: PodcastSection) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        CarouselShelfSection(
+            accessibilityLabel: section.title,
+            items: section.items,
+            contentInset: DetailContentLayout.horizontalInset
+        ) {
             Text(section.title)
                 .font(.title2)
                 .fontWeight(.semibold)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 16) {
-                    ForEach(section.items) { item in
-                        self.itemCard(item)
-                    }
-                }
-            }
+        } itemContent: { item in
+            self.itemCard(item)
         }
     }
 
@@ -121,7 +131,6 @@ struct PodcastsView: View {
 
 // MARK: - PodcastShowCard
 
-@available(macOS 26.0, *)
 private struct PodcastShowCard: View {
     let show: PodcastShow
     let favoritesManager: FavoritesManager
@@ -165,7 +174,6 @@ private struct PodcastShowCard: View {
 
 // MARK: - PodcastEpisodeCard
 
-@available(macOS 26.0, *)
 private struct PodcastEpisodeCard: View {
     let episode: PodcastEpisode
     let action: () -> Void
@@ -234,10 +242,10 @@ private struct PodcastEpisodeCard: View {
 // MARK: - PodcastShowView
 
 /// Detail view for a podcast show with its episodes.
-@available(macOS 26.0, *)
 struct PodcastShowView: View {
     let show: PodcastShow
     let client: any YTMusicClientProtocol
+    @Environment(AuthService.self) private var authService
     @Environment(PlayerService.self) private var playerService
     @Environment(FavoritesManager.self) private var favoritesManager
     @Environment(LibraryViewModel.self) private var libraryViewModel: LibraryViewModel?
@@ -264,8 +272,11 @@ struct PodcastShowView: View {
                 // Episodes list
                 self.episodesList
             }
-            .padding(24)
+            .padding(.vertical, 24)
         }
+        // Inset resting content while the scroll view stays edge-to-edge so the
+        // accent backdrop refracts through the floating glass sidebar.
+        .contentMargins(.horizontal, DetailContentLayout.horizontalInset, for: .scrollContent)
         .accentBackground(from: self.show.thumbnailURL)
         .navigationTitle(self.show.title)
         .navigationDestination(for: AllEpisodesDestination.self) { destination in
@@ -347,27 +358,29 @@ struct PodcastShowView: View {
                             Label("Play Latest", systemImage: "play.fill")
                                 .font(.headline)
                         }
-                        .buttonStyle(.glassProminent)
+                        .compatGlassProminentButton()
                     }
 
-                    // Add to Library button
-                    Button {
-                        Task {
-                            await self.toggleSubscription()
+                    if self.authService.hasPersonalAccount {
+                        // Add to Library button
+                        Button {
+                            Task {
+                                await self.toggleSubscription()
+                            }
+                        } label: {
+                            if self.isSubscribing {
+                                ProgressView()
+                                    .controlSize(.small)
+                            } else {
+                                Label(
+                                    self.isSubscribed ? String(localized: "In Library") : String(localized: "Add to Library"),
+                                    systemImage: self.isSubscribed ? "checkmark" : "plus"
+                                )
+                            }
                         }
-                    } label: {
-                        if self.isSubscribing {
-                            ProgressView()
-                                .controlSize(.small)
-                        } else {
-                            Label(
-                                self.isSubscribed ? String(localized: "In Library") : String(localized: "Add to Library"),
-                                systemImage: self.isSubscribed ? "checkmark" : "plus"
-                            )
-                        }
+                        .buttonStyle(.bordered)
+                        .disabled(self.isSubscribing)
                     }
-                    .buttonStyle(.bordered)
-                    .disabled(self.isSubscribing)
                 }
             }
         }
@@ -492,7 +505,6 @@ struct PodcastShowView: View {
 
 // MARK: - PodcastEpisodeRow
 
-@available(macOS 26.0, *)
 struct PodcastEpisodeRow: View {
     let episode: PodcastEpisode
     let action: () -> Void
@@ -579,7 +591,6 @@ struct AllEpisodesDestination: Hashable {
 // MARK: - AllEpisodesView
 
 /// View displaying all episodes of a podcast show with infinite scroll pagination.
-@available(macOS 26.0, *)
 struct AllEpisodesView: View {
     let show: PodcastShow
     let initialEpisodes: [PodcastEpisode]
@@ -613,8 +624,11 @@ struct AllEpisodesView: View {
                     }
                 }
             }
-            .padding(24)
+            .padding(.vertical, 24)
         }
+        // Inset resting content while the scroll view stays edge-to-edge so the
+        // accent backdrop refracts through the floating glass sidebar.
+        .contentMargins(.horizontal, DetailContentLayout.horizontalInset, for: .scrollContent)
         .accentBackground(from: self.show.thumbnailURL)
         .localizedNavigationTitle("All Episodes")
         .safeAreaInset(edge: .bottom, spacing: 0) {

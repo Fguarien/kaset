@@ -5,7 +5,6 @@ import UniformTypeIdentifiers
 
 /// A horizontal scrolling section displaying pinned Favorites items.
 /// Supports drag-and-drop reordering and context menu actions.
-@available(macOS 26.0, *)
 struct FavoritesSection: View {
     @Environment(PlayerService.self) private var playerService
     @Environment(FavoritesManager.self) private var favoritesManager
@@ -15,37 +14,50 @@ struct FavoritesSection: View {
     /// Binding to navigation path for navigation within the section.
     var onNavigate: ((any Hashable) -> Void)?
 
+    /// Resting horizontal inset for the shelf content, so items rest clear of
+    /// the floating glass sidebar while still scrolling underneath it.
+    /// Defaults to `0` (edge-to-edge) to preserve existing call sites.
+    var contentInset: CGFloat = 0
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        CarouselShelfSection(
+            accessibilityLabel: String(localized: "Favorites"),
+            items: self.favoritesManager.items,
+            showsControls: self.draggedItem == nil,
+            contentInset: self.contentInset
+        ) {
             Text("Favorites")
                 .font(.title2)
                 .fontWeight(.semibold)
+        } itemContent: { item in
+            FavoriteItemCard(
+                item: item,
+                onTap: { self.handleTap(item) }
+            )
+            .draggable(item) {
+                self.dragPreview(for: item)
+            }
+            .dropDestination(for: FavoriteItem.self) { droppedItems, _ in
+                defer { self.draggedItem = nil }
+                return self.handleDrop(droppedItems, on: item)
+            }
+            .contextMenu {
+                self.contextMenu(for: item)
+            }
+        }
+    }
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 16) {
-                    ForEach(self.favoritesManager.items) { item in
-                        FavoriteItemCard(
-                            item: item,
-                            onTap: { self.handleTap(item) }
-                        )
-                        .draggable(item) {
-                            // Drag preview
-                            FavoriteItemCard(item: item, onTap: {})
-                                .opacity(0.8)
-                        }
-                        .dropDestination(for: FavoriteItem.self) { droppedItems, _ in
-                            _ = self.handleDrop(droppedItems, on: item)
-                        }
-                        .contextMenu {
-                            self.contextMenu(for: item)
-                        }
-                    }
+    private func dragPreview(for item: FavoriteItem) -> some View {
+        FavoriteItemCard(item: item, onTap: {})
+            .opacity(0.8)
+            .onAppear {
+                self.draggedItem = item
+            }
+            .onDisappear {
+                if self.draggedItem == item {
+                    self.draggedItem = nil
                 }
             }
-            .scrollClipDisabled()
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(String(localized: "Favorites"))
     }
 
     // MARK: - Actions
@@ -218,13 +230,13 @@ struct FavoritesSection: View {
 // MARK: - FavoriteItemCard
 
 /// A card view for a single Favorites item.
-@available(macOS 26.0, *)
 private struct FavoriteItemCard: View {
     let item: FavoriteItem
     let onTap: () -> Void
 
     private static let cardWidth: CGFloat = 160
     private static let cardHeight: CGFloat = 160
+    private static let thumbnailTargetSize = CGSize(width: cardWidth, height: cardHeight)
 
     @State private var isHovering = false
 
@@ -248,7 +260,7 @@ private struct FavoriteItemCard: View {
     private var thumbnail: some View {
         ZStack {
             if let url = item.thumbnailURL?.highQualityThumbnailURL {
-                CachedAsyncImage(url: url) { image in
+                CachedAsyncImage(url: url, targetSize: Self.thumbnailTargetSize) { image in
                     image
                         .resizable()
                         .aspectRatio(contentMode: .fill)
@@ -334,7 +346,6 @@ private struct FavoriteItemCard: View {
 
 // MARK: - Preview
 
-@available(macOS 26.0, *)
 #Preview {
     let manager = FavoritesManager(skipLoad: true)
     // Add some sample items for preview

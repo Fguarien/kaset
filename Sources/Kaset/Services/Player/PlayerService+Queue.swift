@@ -1,3 +1,4 @@
+// swiftlint:disable file_length
 import Foundation
 
 // MARK: - Queue Management
@@ -6,7 +7,31 @@ import Foundation
 extension PlayerService {
     /// Plays a queue of songs starting at the specified index.
     func playQueue(_ songs: [Song], startingAt index: Int = 0) async {
-        guard !songs.isEmpty else { return }
+        await self.playQueue(songs, startingAt: index, deferringSmartShuffleFill: false)
+    }
+
+    /// Plays a queue of songs starting at the specified index.
+    ///
+    /// - Parameter deferringSmartShuffleFill: When true, the trailing Smart Shuffle fill is skipped
+    ///   and a deferred-load generation is returned so the caller can grow the queue to the full playlist
+    ///   before suggestions are generated (via ``appendOriginalTracks(_:)`` + ``endQueueLoading(_:)``).
+    ///   The loading flag is set synchronously before playback's first suspension point, so the
+    ///   premature fill cannot slip through. When false the queue is treated as complete: any stale
+    ///   deferred load is superseded and suggestions fill immediately for smart mode.
+    /// - Returns: The deferred-load generation when deferring, otherwise nil.
+    @discardableResult
+    func playQueue(_ songs: [Song], startingAt index: Int = 0, deferringSmartShuffleFill: Bool) async -> Int? {
+        guard !songs.isEmpty else { return nil }
+        // A new playback replaces the queue: reset smart-shuffle bookkeeping and cancel any
+        // in-flight fill so the prior queue's state cannot starve or pollute this one.
+        self.resetSmartShuffleForNewQueue()
+        let loadGeneration: Int?
+        if deferringSmartShuffleFill {
+            loadGeneration = self.beginQueueLoading()
+        } else {
+            self.invalidateStaleQueueLoad()
+            loadGeneration = nil
+        }
         self.clearForwardSkipNavigationStack()
         self.recordQueueStateForUndo()
         let safeIndex = max(0, min(index, songs.count - 1))
@@ -30,6 +55,12 @@ extension PlayerService {
             await self.play(song: song)
         }
         self.saveQueueForPersistence()
+        // While a deferred load is pending, `endQueueLoading` performs the single authoritative fill
+        // against the complete playlist (the `isQueueLoading` guard already no-ops a call here).
+        if self.shuffleMode == .smart, loadGeneration == nil {
+            await self.fillSmartShuffleWindow()
+        }
+        return loadGeneration
     }
 
     /// Plays a song and fetches similar songs (radio queue) in the background.
@@ -38,6 +69,7 @@ extension PlayerService {
         self.logger.info("Playing with radio: \(song.title)")
         self.clearForwardSkipNavigationStack()
         self.recordQueueStateForUndo()
+        self.prepareForNewPlaybackContext()
 
         // Clear mix continuation since this is a song radio, not a mix
         self.mixContinuationToken = nil
@@ -61,6 +93,8 @@ extension PlayerService {
     ///   - startVideoId: Optional video ID to start with. If nil, API picks a random starting point.
     func playWithMix(playlistId: String, startVideoId: String?) async {
         self.logger.info("Playing mix playlist: \(playlistId), startVideoId: \(startVideoId ?? "nil (random)")")
+        let requestGeneration = self.playbackRequestGeneration
+        let continuationRequiresAuth = self.authService?.hasPersonalAccount == true
         self.clearForwardSkipNavigationStack()
         self.recordQueueStateForUndo()
 
@@ -77,13 +111,24 @@ extension PlayerService {
                 return
             }
 
+            guard requestGeneration == self.playbackRequestGeneration else {
+                self.logger.info("Discarding stale mix playback request after privacy boundary")
+                return
+            }
+
             // Store continuation token for infinite mix
             self.mixContinuationToken = result.continuationToken
+            self.mixContinuationRequiresAuth = continuationRequiresAuth
 
             // Shuffle the queue to get a different order each time
             // YouTube's API returns a personalized but consistent order per session,
             // so we shuffle to give the user variety on each Mix button click
             let shuffledSongs = result.songs.shuffled()
+
+            // The mix is confirmed non-empty: now supersede any in-flight deferred load and reset
+            // smart-shuffle (done here, not before the await, so a failed/empty mix that returns
+            // without replacing the queue does not prematurely stand down an active playlist load).
+            self.prepareForNewPlaybackContext()
 
             // Set up the queue and play the first song
             self.setQueue(shuffledSongs)
@@ -110,6 +155,7 @@ extension PlayerService {
         // Only fetch if we have a continuation token and we're near the end
         guard let token = mixContinuationToken,
               !isFetchingMoreMixSongs,
+              !(self.mixContinuationRequiresAuth && self.authService?.hasPersonalAccount != true),
               let client = ytMusicClient
         else {
             return
@@ -122,9 +168,15 @@ extension PlayerService {
 
         self.logger.info("Fetching more mix songs, \(songsRemaining) remaining in queue")
         self.isFetchingMoreMixSongs = true
+        let requestGeneration = self.playbackRequestGeneration
 
         do {
             let result = try await client.getMixQueueContinuation(continuationToken: token)
+            guard requestGeneration == self.playbackRequestGeneration else {
+                self.logger.info("Discarding stale mix continuation after privacy boundary")
+                self.isFetchingMoreMixSongs = false
+                return
+            }
             self.logger.debug("Continuation returned \(result.songs.count) songs, hasNextToken: \(result.continuationToken != nil)")
 
             // Filter out songs already in queue to avoid duplicates
@@ -149,6 +201,7 @@ extension PlayerService {
 
     /// Fetches radio queue and applies it, keeping the current song at the front.
     func fetchAndApplyRadioQueue(for videoId: String) async {
+        let requestGeneration = self.playbackRequestGeneration
         guard let client = ytMusicClient else {
             self.logger.warning("No YTMusicClient available for fetching radio queue")
             return
@@ -156,6 +209,10 @@ extension PlayerService {
 
         do {
             let radioSongs = try await client.getRadioQueue(videoId: videoId)
+            guard requestGeneration == self.playbackRequestGeneration else {
+                self.logger.info("Discarding stale radio queue after privacy boundary")
+                return
+            }
             guard !radioSongs.isEmpty else {
                 self.logger.info("No radio songs returned")
                 return
@@ -218,6 +275,7 @@ extension PlayerService {
         self.clearForwardSkipNavigationStack()
         self.recordQueueStateForUndo()
         self.mixContinuationToken = nil
+        self.prepareForNewPlaybackContext()
         self.setQueue([])
         self.queueOrderBeforeShuffle = nil
         self.currentIndex = 0
@@ -231,6 +289,7 @@ extension PlayerService {
         self.recordQueueStateForUndo()
         // Clear mix continuation since queue is being manually cleared
         self.mixContinuationToken = nil
+        self.prepareForNewPlaybackContext()
 
         guard let currentTrack else {
             self.setQueue([])
@@ -258,6 +317,7 @@ extension PlayerService {
         }
         // Check if we need to fetch more songs for infinite mix
         await self.fetchMoreMixSongsIfNeeded()
+        await self.fillSmartShuffleWindow()
         self.saveQueueForPersistence()
     }
 
@@ -275,26 +335,156 @@ extension PlayerService {
         self.saveQueueForPersistence()
     }
 
-    /// Removes songs from the queue by stable entry IDs.
-    /// - Parameter entryIDs: Set of queue entry IDs to remove.
-    func removeFromQueue(entryIDs: Set<UUID>) {
+    /// Whether the queue contains the same song more than once.
+    var queueHasDuplicateEntries: Bool {
+        var seenVideoIds = Set<String>()
+        for song in self.queue where !seenVideoIds.insert(song.videoId).inserted {
+            return true
+        }
+        return false
+    }
+
+    /// Removes the queue entry at the given index, leaving other occurrences of the same song intact.
+    /// - Parameter index: The queue index to remove.
+    func removeFromQueue(at index: Int) {
+        guard self.queueEntries.indices.contains(index) else { return }
         self.clearForwardSkipNavigationStack()
         self.recordQueueStateForUndo()
         let previousCount = self.queue.count
         let currentEntryID = self.currentQueueEntryID
-        let remainingEntries = self.queueEntries.filter { !entryIDs.contains($0.id) }
+        let originalCurrentIndex = self.currentIndex
+        var remainingEntries = self.queueEntries
+        remainingEntries.remove(at: index)
         self.setQueue(entries: remainingEntries)
+        self.realignCurrentIndexAfterQueueMutation(
+            currentEntryID: currentEntryID,
+            originalCurrentIndex: originalCurrentIndex,
+            removedIndex: index
+        )
 
-        if let currentEntryID,
-           let newIndex = self.queueEntryIDs.firstIndex(of: currentEntryID)
-        {
-            self.currentIndex = newIndex
-        } else if self.currentIndex >= self.queue.count {
-            self.currentIndex = max(0, self.queue.count - 1)
+        self.logger.info("Removed queue entry at index \(index); queue size \(previousCount) -> \(self.queue.count)")
+        self.saveQueueForPersistence()
+    }
+
+    /// Removes songs from the queue by stable entry IDs.
+    /// - Parameter entryIDs: Set of queue entry IDs to remove.
+    func removeFromQueue(entryIDs: Set<UUID>) {
+        guard !entryIDs.isEmpty else { return }
+
+        let priorEntries = self.queueEntries
+        var remainingEntries: [QueueEntry] = []
+        remainingEntries.reserveCapacity(priorEntries.count)
+        var removedIndices: [Int] = []
+
+        for (index, entry) in priorEntries.enumerated() {
+            if entryIDs.contains(entry.id) {
+                removedIndices.append(index)
+            } else {
+                remainingEntries.append(entry)
+            }
         }
 
-        self.logger.info("Removed \(previousCount - self.queue.count) songs from queue")
+        guard !removedIndices.isEmpty else { return }
+
+        self.clearForwardSkipNavigationStack()
+        self.recordQueueStateForUndo()
+        let previousCount = priorEntries.count
+        let currentEntryID = self.currentQueueEntryID
+        let originalCurrentIndex = self.currentIndex
+        self.setQueue(entries: remainingEntries)
+        self.realignCurrentIndexAfterQueueMutation(
+            currentEntryID: currentEntryID,
+            originalCurrentIndex: originalCurrentIndex,
+            removedIndices: removedIndices
+        )
+
+        self.logger.info("Removed \(previousCount - remainingEntries.count) songs from queue")
         self.saveQueueForPersistence()
+    }
+
+    /// Removes later duplicate songs from the queue, keeping the first occurrence of each video ID.
+    func removeDuplicateQueueEntries() {
+        guard self.queueHasDuplicateEntries else { return }
+
+        self.clearForwardSkipNavigationStack()
+        self.recordQueueStateForUndo()
+
+        let currentEntryID = self.currentQueueEntryID
+        var seenVideoIds = Set<String>()
+        var deduplicatedEntries: [QueueEntry] = []
+        var removedCount = 0
+
+        for entry in self.queueEntries {
+            if seenVideoIds.contains(entry.song.videoId) {
+                removedCount += 1
+                continue
+            }
+            seenVideoIds.insert(entry.song.videoId)
+            deduplicatedEntries.append(entry)
+        }
+
+        guard removedCount > 0 else { return }
+
+        let priorEntries = self.queueEntries
+        self.setQueue(entries: deduplicatedEntries)
+        self.realignCurrentIndexAfterDuplicateRemoval(
+            currentEntryID: currentEntryID,
+            priorEntries: priorEntries
+        )
+        self.logger.info("Removed \(removedCount) duplicate queue entries")
+        self.saveQueueForPersistence()
+    }
+
+    private func realignCurrentIndexAfterQueueMutation(
+        currentEntryID: UUID?,
+        originalCurrentIndex: Int,
+        removedIndex: Int
+    ) {
+        self.realignCurrentIndexAfterQueueMutation(
+            currentEntryID: currentEntryID,
+            originalCurrentIndex: originalCurrentIndex,
+            removedIndices: [removedIndex]
+        )
+    }
+
+    private func realignCurrentIndexAfterQueueMutation(
+        currentEntryID: UUID?,
+        originalCurrentIndex: Int,
+        removedIndices: [Int]
+    ) {
+        let currentEntries = self.queueEntries
+        if let currentEntryID,
+           let newIndex = currentEntries.firstIndex(where: { $0.id == currentEntryID })
+        {
+            self.currentIndex = newIndex
+            return
+        }
+
+        let removedBeforeCurrent = removedIndices.count(where: { $0 < originalCurrentIndex })
+        let adjustedIndex = max(0, originalCurrentIndex - removedBeforeCurrent)
+        self.currentIndex = min(adjustedIndex, max(0, currentEntries.count - 1))
+    }
+
+    private func realignCurrentIndexAfterDuplicateRemoval(
+        currentEntryID: UUID?,
+        priorEntries: [QueueEntry]
+    ) {
+        if let currentEntryID,
+           let keptIndex = self.queueEntries.firstIndex(where: { $0.id == currentEntryID })
+        {
+            self.currentIndex = keptIndex
+            return
+        }
+
+        if let currentEntryID,
+           let removedEntry = priorEntries.first(where: { $0.id == currentEntryID }),
+           let fallbackIndex = self.queueEntries.firstIndex(where: { $0.song.videoId == removedEntry.song.videoId })
+        {
+            self.currentIndex = fallbackIndex
+            return
+        }
+
+        self.currentIndex = min(self.currentIndex, max(0, self.queueEntries.count - 1))
     }
 
     /// Removes songs from the queue by video ID.
@@ -304,17 +494,17 @@ extension PlayerService {
         self.recordQueueStateForUndo()
         let previousCount = self.queue.count
         let currentEntryID = self.currentQueueEntryID
+        let originalCurrentIndex = self.currentIndex
+        let indicesToRemove = self.queueEntries.enumerated()
+            .filter { videoIds.contains($0.element.song.videoId) }
+            .map(\.offset)
         let remainingEntries = self.queueEntries.filter { !videoIds.contains($0.song.videoId) }
         self.setQueue(entries: remainingEntries)
-
-        // Adjust currentIndex if needed
-        if let currentEntryID,
-           let newIndex = self.queueEntryIDs.firstIndex(of: currentEntryID)
-        {
-            self.currentIndex = newIndex
-        } else if self.currentIndex >= self.queue.count {
-            self.currentIndex = max(0, self.queue.count - 1)
-        }
+        self.realignCurrentIndexAfterQueueMutation(
+            currentEntryID: currentEntryID,
+            originalCurrentIndex: originalCurrentIndex,
+            removedIndices: indicesToRemove
+        )
 
         self.logger.info("Removed \(previousCount - self.queue.count) songs from queue")
         self.saveQueueForPersistence()
@@ -359,8 +549,9 @@ extension PlayerService {
         self.clearForwardSkipNavigationStack()
         self.recordQueueStateForUndo()
         let currentEntryID = self.currentQueueEntryID
+        let currentEntries = self.queueEntries
         var entriesByVideoId: [String: [QueueEntry]] = [:]
-        for entry in self.queueEntries {
+        for entry in currentEntries {
             entriesByVideoId[entry.song.videoId, default: []].append(entry)
         }
 
@@ -375,7 +566,7 @@ extension PlayerService {
 
         // Update currentIndex to match current track's new position
         if let currentEntryID,
-           let newIndex = self.queueEntryIDs.firstIndex(of: currentEntryID)
+           let newIndex = reorderedEntries.firstIndex(where: { $0.id == currentEntryID })
         {
             self.currentIndex = newIndex
         }
@@ -446,9 +637,33 @@ extension PlayerService {
         let currentEntriesByID = Dictionary(uniqueKeysWithValues: currentEntries.map { ($0.id, $0) })
         let currentEntryIDs = Set(currentEntries.map(\.id))
 
+        let snapshotEntryIDs = Set(snapshot.map(\.id))
         var restoredEntries: [QueueEntry] = []
-        for entry in snapshot where currentEntryIDs.contains(entry.id) {
-            restoredEntries.append(currentEntriesByID[entry.id] ?? entry)
+        if let currentEntryID,
+           snapshotEntryIDs.contains(currentEntryID) == false,
+           let currentEntry = currentEntriesByID[currentEntryID],
+           let currentPosition = currentEntries.firstIndex(where: { $0.id == currentEntryID })
+        {
+            // The current Smart Shuffle suggestion is not in the original-order snapshot. Keep
+            // originals that were already behind the playhead before it, then insert the current
+            // suggestion, then restore the remaining originals in playlist order so Next continues
+            // through the unplayed playlist instead of skipping it.
+            let originalIDsBeforeCurrent = Set(
+                currentEntries[..<currentPosition]
+                    .filter { snapshotEntryIDs.contains($0.id) }
+                    .map(\.id)
+            )
+            for entry in snapshot where currentEntryIDs.contains(entry.id) && originalIDsBeforeCurrent.contains(entry.id) {
+                restoredEntries.append(currentEntriesByID[entry.id] ?? entry)
+            }
+            restoredEntries.append(currentEntry)
+            for entry in snapshot where currentEntryIDs.contains(entry.id) && originalIDsBeforeCurrent.contains(entry.id) == false {
+                restoredEntries.append(currentEntriesByID[entry.id] ?? entry)
+            }
+        } else {
+            for entry in snapshot where currentEntryIDs.contains(entry.id) {
+                restoredEntries.append(currentEntriesByID[entry.id] ?? entry)
+            }
         }
 
         let restoredEntryIDs = Set(restoredEntries.map(\.id))
@@ -492,10 +707,12 @@ extension PlayerService {
     /// Serialized playback session persisted across launches.
     private struct PersistedPlaybackSession: Codable {
         let queue: [Song]
+        let entrySources: [QueueEntry.Source]?
         let currentIndex: Int
         let currentVideoId: String?
         let progress: TimeInterval
         let duration: TimeInterval
+        let ownerScope: String?
     }
 
     /// UserDefaults keys for queue persistence (no expiry; saved queue is kept until overwritten or cleared).
@@ -505,41 +722,112 @@ extension PlayerService {
 
     /// Saves the current queue to UserDefaults for restoration on next launch.
     func saveQueueForPersistence() {
-        guard !self.queue.isEmpty else {
+        let queue = self.queue
+        guard !queue.isEmpty else {
+            if self.suppressNextEmptyQueuePersistence {
+                self.suppressNextEmptyQueuePersistence = false
+                self.logger.info("Skipped clearing saved playback session after guest-startup cleanup")
+                return
+            }
             self.removeSavedPlaybackSession()
             self.logger.info("Cleared saved playback session (queue is empty)")
             return
         }
 
+        self.suppressNextEmptyQueuePersistence = false
+
+        // Smart Shuffle suggestions are ephemeral (regenerated from live context), so never
+        // persist them. Strip before saving, keeping the currently-playing track if it is one.
+        let currentID = self.currentQueueEntryID
+        let persistedEntries = Self.stripSuggested(from: self.queueEntries, keepingCurrentID: currentID)
+        let persistableQueue = persistedEntries.map(\.song)
+        guard !persistableQueue.isEmpty else {
+            self.removeSavedPlaybackSession()
+            return
+        }
+
         do {
             let encoder = JSONEncoder()
-            let safeIndex = min(max(self.currentIndex, 0), self.queue.count - 1)
-            let currentVideoId = self.currentTrack?.videoId ?? self.queue[safe: safeIndex]?.videoId
-            let resolvedDuration = max(self.duration, self.currentTrack?.duration ?? self.queue[safe: safeIndex]?.duration ?? 0)
+            let safeIndex: Int = {
+                if let currentID, let index = persistedEntries.firstIndex(where: { $0.id == currentID }) {
+                    return index
+                }
+                return min(max(self.currentIndex, 0), persistableQueue.count - 1)
+            }()
+            let currentVideoId = self.currentTrack?.videoId ?? persistableQueue[safe: safeIndex]?.videoId
+            let resolvedDuration = max(self.duration, self.currentTrack?.duration ?? persistableQueue[safe: safeIndex]?.duration ?? 0)
             let clampedProgress = resolvedDuration > 0
                 ? min(max(self.progress, 0), resolvedDuration)
                 : max(self.progress, 0)
 
-            let queueData = try encoder.encode(self.queue)
+            let isKnownGuestSession = self.authService?.shouldPersistGuestPlaybackState == true
+            let ownerScope = isKnownGuestSession
+                ? Self.playbackSessionScopeGuest
+                : Self.playbackSessionScopeAuthenticated
+            let persistedQueue = isKnownGuestSession ? Self.queueWithoutAccountMetadata(persistableQueue) : persistableQueue
+            let queueData = try encoder.encode(persistedQueue)
             let sessionData = try encoder.encode(
                 PersistedPlaybackSession(
-                    queue: self.queue,
+                    queue: persistedQueue,
+                    entrySources: persistedEntries.map(\.source),
                     currentIndex: safeIndex,
                     currentVideoId: currentVideoId,
                     progress: clampedProgress,
-                    duration: resolvedDuration
+                    duration: resolvedDuration,
+                    ownerScope: ownerScope
                 )
             )
 
             UserDefaults.standard.set(queueData, forKey: Self.savedQueueKey)
             UserDefaults.standard.set(safeIndex, forKey: Self.savedQueueIndexKey)
             UserDefaults.standard.set(sessionData, forKey: Self.savedPlaybackSessionKey)
-            self.logger.info("Saved playback session with \(self.queue.count) songs at index \(safeIndex)")
+            self.restoredPlaybackSessionOwnerScope = ownerScope
+            self.logger.info("Saved playback session with \(persistedQueue.count) songs at index \(safeIndex)")
 
             // Re-sync the web queue in case the queue order or next song changed
             self.syncWebQueue()
         } catch {
             self.logger.error("Failed to save playback session: \(error.localizedDescription)")
+        }
+    }
+
+    private static func queueWithoutAccountMetadata(_ queue: [Song]) -> [Song] {
+        queue.map { song in
+            var sanitized = song
+            sanitized.likeStatus = nil
+            sanitized.isInLibrary = nil
+            sanitized.feedbackTokens = nil
+            return sanitized
+        }
+    }
+
+    func invalidatePendingPlaybackRequests() {
+        self.playbackRequestGeneration &+= 1
+    }
+
+    /// Re-tags a restored/persisted playback session after crossing a playback
+    /// privacy boundary without otherwise changing the queue payload.
+    func updateRestoredPlaybackSessionOwnerScope(_ ownerScope: String?) {
+        self.restoredPlaybackSessionOwnerScope = ownerScope
+
+        guard let sessionData = UserDefaults.standard.data(forKey: Self.savedPlaybackSessionKey) else { return }
+
+        do {
+            let decoder = JSONDecoder()
+            let savedSession = try decoder.decode(PersistedPlaybackSession.self, from: sessionData)
+            let updatedSession = PersistedPlaybackSession(
+                queue: savedSession.queue,
+                entrySources: savedSession.entrySources,
+                currentIndex: savedSession.currentIndex,
+                currentVideoId: savedSession.currentVideoId,
+                progress: savedSession.progress,
+                duration: savedSession.duration,
+                ownerScope: ownerScope
+            )
+            let sessionData = try JSONEncoder().encode(updatedSession)
+            UserDefaults.standard.set(sessionData, forKey: Self.savedPlaybackSessionKey)
+        } catch {
+            self.logger.error("Failed to update playback session owner scope: \(error.localizedDescription)")
         }
     }
 
@@ -552,7 +840,10 @@ extension PlayerService {
         if let sessionData = UserDefaults.standard.data(forKey: Self.savedPlaybackSessionKey) {
             do {
                 let savedSession = try decoder.decode(PersistedPlaybackSession.self, from: sessionData)
-                guard !savedSession.queue.isEmpty else {
+                let restoredQueue = savedSession.ownerScope == Self.playbackSessionScopeGuest
+                    ? Self.queueWithoutAccountMetadata(savedSession.queue)
+                    : savedSession.queue
+                guard !restoredQueue.isEmpty else {
                     self.logger.info("Saved playback session is empty")
                     UserDefaults.standard.removeObject(forKey: Self.savedPlaybackSessionKey)
                     return self.restoreLegacyQueueFromPersistence(using: decoder)
@@ -561,18 +852,21 @@ extension PlayerService {
                 let resolvedIndex = self.resolvedPersistedQueueIndex(
                     savedIndex: savedSession.currentIndex,
                     currentVideoId: savedSession.currentVideoId,
-                    in: savedSession.queue
+                    in: restoredQueue
                 )
 
                 self.applyRestoredPlaybackSession(
-                    queue: savedSession.queue,
+                    queue: restoredQueue,
+                    entrySources: savedSession.entrySources,
                     currentIndex: resolvedIndex,
                     progress: savedSession.progress,
                     duration: savedSession.duration
                 )
+                self.restoredPlaybackSessionOwnerScope = savedSession.ownerScope
                 self.logger.info(
-                    "Restored playback session with \(savedSession.queue.count) songs at index \(resolvedIndex)"
+                    "Restored playback session with \(restoredQueue.count) songs at index \(resolvedIndex)"
                 )
+                self.fillSmartShuffleWindowAfterRestoreIfNeeded()
                 return true
             } catch {
                 self.logger.error("Failed to restore playback session: \(error.localizedDescription)")
@@ -581,6 +875,14 @@ extension PlayerService {
         }
 
         return self.restoreLegacyQueueFromPersistence(using: decoder)
+    }
+
+    /// After restoring a saved session in smart mode, regenerates the (ephemeral, never-persisted)
+    /// suggestion window so it is present without requiring a manual track advance. Best effort: a
+    /// no-op until a client is attached and while the queue is still loading.
+    private func fillSmartShuffleWindowAfterRestoreIfNeeded() {
+        guard self.shuffleMode == .smart else { return }
+        Task { @MainActor in await self.fillSmartShuffleWindow() }
     }
 
     /// Clears the saved queue from UserDefaults.
@@ -619,7 +921,9 @@ extension PlayerService {
                 progress: 0,
                 duration: restoredDuration
             )
+            self.restoredPlaybackSessionOwnerScope = nil
             self.logger.info("Restored legacy queue with \(savedQueue.count) songs at index \(resolvedIndex)")
+            self.fillSmartShuffleWindowAfterRestoreIfNeeded()
             return true
         } catch {
             self.logger.error("Failed to restore legacy queue: \(error.localizedDescription)")
@@ -633,6 +937,7 @@ extension PlayerService {
         UserDefaults.standard.removeObject(forKey: Self.savedQueueKey)
         UserDefaults.standard.removeObject(forKey: Self.savedQueueIndexKey)
         UserDefaults.standard.removeObject(forKey: Self.savedPlaybackSessionKey)
+        self.restoredPlaybackSessionOwnerScope = nil
     }
 
     /// Resolves the queue index from saved metadata.
@@ -654,100 +959,5 @@ extension PlayerService {
         }
 
         return min(max(savedIndex, 0), queue.count - 1)
-    }
-
-    // MARK: - Queue Metadata Enrichment
-
-    /// Starts the background metadata enrichment service.
-    /// This periodically checks the queue for songs with incomplete metadata and fetches full details.
-    func startQueueEnrichmentService() {
-        // Cancel any existing task
-        enrichmentTask?.cancel()
-
-        enrichmentTask = Task { [weak self] in
-            guard let self else { return }
-
-            while !Task.isCancelled {
-                // Wait 30 seconds between checks
-                try? await Task.sleep(for: .seconds(30))
-
-                guard !Task.isCancelled else { break }
-
-                // Perform enrichment
-                await self.enrichQueueMetadata()
-            }
-        }
-    }
-
-    /// Stops the background enrichment service.
-    func stopQueueEnrichmentService() {
-        enrichmentTask?.cancel()
-        enrichmentTask = nil
-    }
-
-    /// Identifies songs in the queue that need metadata enrichment.
-    /// - Returns: Array of tuples containing index and videoId for songs needing enrichment.
-    func identifySongsNeedingEnrichment() -> [(index: Int, videoId: String)] {
-        var songsNeedingEnrichment: [(index: Int, videoId: String)] = []
-
-        for (index, song) in queue.enumerated() {
-            // Check if song needs enrichment:
-            // 1. No artists or all artists are empty/unknown
-            // 2. Title is placeholder ("Loading..." or empty)
-            // 3. No thumbnail
-            let needsEnrichment = song.artists.isEmpty ||
-                song.artists.allSatisfy { $0.name.isEmpty || $0.name == "Unknown Artist" } ||
-                song.title.isEmpty ||
-                song.title == "Loading..." ||
-                song.thumbnailURL == nil
-
-            if needsEnrichment {
-                songsNeedingEnrichment.append((index: index, videoId: song.videoId))
-            }
-        }
-
-        return songsNeedingEnrichment
-    }
-
-    /// Enriches queue metadata by fetching full song details for incomplete entries.
-    /// This updates the queue in-place and persists the enriched data.
-    func enrichQueueMetadata() async {
-        guard let client = self.ytMusicClient else { return }
-
-        let songsToEnrich = self.identifySongsNeedingEnrichment()
-
-        guard !songsToEnrich.isEmpty else { return }
-
-        self.logger.info("Enriching metadata for \(songsToEnrich.count) songs in queue")
-
-        // Process in small batches to avoid overwhelming the API
-        // Process one song at a time to be gentle on the API
-        for (index, videoId) in songsToEnrich {
-            // Check if still needed (song might have been removed)
-            guard index < queue.count, queue[index].videoId == videoId else { continue }
-
-            do {
-                let enrichedSong = try await client.getSong(videoId: videoId)
-
-                // Update the queue in-place
-                if index < queue.count, queue[index].videoId == videoId {
-                    var updatedEntries = self.queueEntries
-                    updatedEntries[index] = QueueEntry(id: updatedEntries[index].id, song: enrichedSong)
-                    self.setQueue(entries: updatedEntries)
-                    self.logger.debug("Enriched song \(index): '\(enrichedSong.title)' - artists: \(enrichedSong.artistsDisplay)")
-                }
-
-                // Small delay between requests to be API-friendly
-                if songsToEnrich.count > 1 {
-                    try? await Task.sleep(for: .milliseconds(100))
-                }
-            } catch {
-                self.logger.warning("Failed to enrich metadata for song \(videoId): \(error.localizedDescription)")
-            }
-        }
-
-        // Save the enriched queue to persistence
-        self.saveQueueForPersistence()
-        self.logger.info("Queue metadata enrichment complete, saved to persistence")
     }
 }

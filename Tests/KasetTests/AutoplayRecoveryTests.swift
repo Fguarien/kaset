@@ -116,6 +116,14 @@ struct AutoplayRecoveryJSTests {
     func observerScriptRetriesRecoveryWhenMediaAlreadyReady() {
         #expect(SingletonPlayerWebView.observerScript.contains("video.readyState >= 3"))
     }
+
+    @Test("Observer script schedules trailing throttled updates")
+    func observerScriptSchedulesTrailingThrottledUpdates() {
+        let script = SingletonPlayerWebView.observerScript
+
+        #expect(script.contains("trailingUpdateTimeoutId"))
+        #expect(script.contains("sendUpdate(true);"))
+    }
 }
 
 // MARK: - AutoplayIntentScriptTests
@@ -125,13 +133,15 @@ struct AutoplayIntentScriptTests {
     @Test("Sets the pending flag to true for a fresh navigation")
     func setsPendingTrue() {
         let script = SingletonPlayerWebView.autoplayIntentScript(isRestoringPlaybackSession: false)
-        #expect(script == "window.__kasetAutoplayPending = true;")
+        #expect(script.contains("window.__kasetAutoplayPending = true;"))
+        #expect(script.contains("window.__kasetBlockAutoplay = false;"))
     }
 
     @Test("Sets the pending flag to false during a restored session")
     func clearsPendingForRestoredSession() {
         let script = SingletonPlayerWebView.autoplayIntentScript(isRestoringPlaybackSession: true)
-        #expect(script == "window.__kasetAutoplayPending = false;")
+        #expect(script.contains("window.__kasetAutoplayPending = false;"))
+        #expect(script.contains("window.__kasetBlockAutoplay = true;"))
     }
 
     @Test("Page bootstrap seeds autoplay intent and target volume")

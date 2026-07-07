@@ -16,6 +16,7 @@ enum TestAccessibilityID {
 
     enum Home {
         static let container = "homeView"
+        static let scrollView = "homeView.scrollView"
     }
 
     enum Search {
@@ -36,11 +37,16 @@ enum TestAccessibilityID {
     }
 
     enum PlayerBar {
+        static let miniPlayerButton = "playerBar.miniPlayer"
         static let videoButton = "playerBar.video"
     }
 
     enum VideoWindow {
         static let container = "videoWindow"
+    }
+
+    enum Lyrics {
+        static let fallbackPanel = "lyrics.fallbackPanel"
     }
 
     // MARK: - Sidebar Profile
@@ -58,6 +64,7 @@ enum TestAccessibilityID {
         static let container = "accountSwitcher"
         static let header = "accountSwitcher.header"
         static let accountsList = "accountSwitcher.accountsList"
+        static let guestModeRow = "accountSwitcher.guestMode"
 
         static func accountRow(index: Int) -> String {
             "accountSwitcher.account.\(index)"
@@ -225,6 +232,7 @@ class KasetUITestCase: XCTestCase {
             "artist": "Current Artist",
             "videoId": "current-video",
             "duration": 180,
+            "hasVideo": hasVideo,
         ]
 
         if let jsonData = try? JSONSerialization.data(withJSONObject: track),
@@ -320,6 +328,7 @@ class KasetUITestCase: XCTestCase {
             "artist": "Current Artist",
             "videoId": "current-video",
             "duration": 180,
+            "hasVideo": hasVideo,
         ]
 
         if let jsonData = try? JSONSerialization.data(withJSONObject: track),

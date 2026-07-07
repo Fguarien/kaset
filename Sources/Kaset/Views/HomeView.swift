@@ -1,12 +1,12 @@
 import SwiftUI
 
 /// Home view displaying personalized content sections.
-@available(macOS 26.0, *)
 struct HomeView: View {
     @State var viewModel: HomeViewModel
     @Environment(PlayerService.self) private var playerService
     @Environment(FavoritesManager.self) private var favoritesManager
     @Environment(SongLikeStatusManager.self) private var likeStatusManager
+    @Environment(AuthService.self) private var authService
     @State private var navigationPath = NavigationPath()
     @State private var networkMonitor = NetworkMonitor.shared
 
@@ -35,10 +35,16 @@ struct HomeView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .localizedNavigationTitle("Home")
-            .navigationDestinations(client: self.viewModel.client)
+            .navigationDestinations(
+                client: self.viewModel.client,
+                playerBarNavigationAction: self.playerBarNavigationAction
+            )
+            .playerBarMusicNavigation(path: self.$navigationPath)
         }
+        .playerBarMusicNavigation(path: self.$navigationPath)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             PlayerBar()
+                .playerBarMusicNavigation(path: self.$navigationPath)
         }
         .onAppear {
             if self.viewModel.loadingState == .idle {
@@ -52,26 +58,36 @@ struct HomeView: View {
         }
     }
 
+    private var playerBarNavigationAction: PlayerBarNavigationAction {
+        PlayerBarNavigationAction(
+            openArtist: { self.navigationPath.append($0) },
+            openAlbum: { self.navigationPath.append($0) }
+        )
+    }
+
     // MARK: - Views
 
     private var contentView: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 32) {
                 // Favorites section (hidden when empty)
-                if self.favoritesManager.isVisible {
-                    FavoritesSection(onNavigate: { destination in
-                        if let playlist = destination as? Playlist {
-                            self.navigationPath.append(playlist)
-                        } else if let artist = destination as? Artist {
-                            self.navigationPath.append(artist)
-                        } else if let podcastShow = destination as? PodcastShow {
-                            self.navigationPath.append(podcastShow)
-                        }
-                    })
+                if self.authService.hasPersonalAccount, self.favoritesManager.isVisible {
+                    FavoritesSection(
+                        onNavigate: { destination in
+                            if let playlist = destination as? Playlist {
+                                self.navigationPath.append(playlist)
+                            } else if let artist = destination as? Artist {
+                                self.navigationPath.append(artist)
+                            } else if let podcastShow = destination as? PodcastShow {
+                                self.navigationPath.append(podcastShow)
+                            }
+                        },
+                        contentInset: DetailContentLayout.horizontalInset
+                    )
                     .staggeredAppearance(index: 0)
                 }
 
-                // API sections - use stable id without array enumeration
+                // API sections
                 ForEach(self.viewModel.sections) { section in
                     self.sectionView(section)
                         .task {
@@ -79,46 +95,57 @@ struct HomeView: View {
                         }
                 }
             }
-            .padding(.horizontal, 24)
+            // The ScrollView fills the detail column edge-to-edge so shelves
+            // scroll under the floating glass sidebar; each shelf restores a
+            // resting inset via `contentInset`. Only the vertical inset stays
+            // on the stack.
             .padding(.vertical, 20)
         }
+        .accessibilityIdentifier(AccessibilityID.Home.scrollView)
     }
 
     private func sectionView(_ section: HomeSection) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        CarouselShelfSection(
+            accessibilityLabel: section.title,
+            items: Array(section.items.enumerated()),
+            id: \.element.id,
+            itemAlignment: .top,
+            contentInset: DetailContentLayout.horizontalInset
+        ) {
             Text(section.title)
                 .font(.title2)
                 .fontWeight(.semibold)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(alignment: .top, spacing: 16) {
-                    // Use stable ID from items, avoid enumeration for non-chart sections
-                    if section.isChart {
-                        ForEach(Array(section.items.enumerated()), id: \.element.id) { index, item in
-                            HomeSectionItemCard(item: item, rank: index + 1) {
-                                self.playItem(item, in: section, at: index)
-                            }
-                            .contextMenu {
-                                self.contextMenuItems(for: item, in: section, at: index)
-                            }
-                        }
-                    } else {
-                        ForEach(section.items) { item in
-                            HomeSectionItemCard(item: item) {
-                                self.playItem(item, in: section, at: 0)
-                            }
-                            .contextMenu {
-                                self.contextMenuItems(for: item, in: section, at: 0)
-                            }
-                        }
-                    }
-                }
+        } itemContent: { index, item in
+            HomeSectionItemCard(
+                item: item,
+                rank: section.isChart ? index + 1 : nil,
+                playAction: self.playlistPlayAction(for: item)
+            ) {
+                self.playItem(item, in: section, at: index)
             }
-            .scrollClipDisabled()
+            .contextMenu {
+                self.contextMenuItems(for: item, in: section, at: index)
+            }
         }
     }
 
     // MARK: - Context Menu
+
+    private func playlistPlayAction(for item: HomeSectionItem) -> (() -> Void)? {
+        guard case let .playlist(playlist) = item,
+              SongActionsHelper.canQuickPlayPlaylist(playlist)
+        else {
+            return nil
+        }
+
+        return {
+            SongActionsHelper.playPlaylist(
+                playlist,
+                client: self.viewModel.client,
+                playerService: self.playerService
+            )
+        }
+    }
 
     @ViewBuilder
     private func contextMenuItems(for item: HomeSectionItem, in _: HomeSection, at _: Int) -> some View {
@@ -308,5 +335,6 @@ struct HomeView: View {
     let client = YTMusicClient(authService: authService, webKitManager: .shared)
     HomeView(viewModel: HomeViewModel(client: client))
         .environment(PlayerService())
+        .environment(authService)
         .environment(FavoritesManager.shared)
 }

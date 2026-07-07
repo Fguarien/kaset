@@ -5,7 +5,6 @@ import SwiftUI
 // MARK: - ExtensionsSettingsView
 
 /// Settings view for managing user-installed web extensions.
-@available(macOS 26.0, *)
 struct ExtensionsSettingsView: View {
     @State private var manager = ExtensionsManager.shared
     @State private var showRestartAlert = false
@@ -16,7 +15,7 @@ struct ExtensionsSettingsView: View {
         ScrollView {
             VStack(spacing: 20) {
                 // Glass Section
-                GlassEffectContainer(spacing: 0) {
+                CompatGlassContainer(spacing: 0) {
                     VStack(alignment: .leading, spacing: 0) {
                         Text("Installed Extensions")
                             .font(.headline)
@@ -63,11 +62,15 @@ struct ExtensionsSettingsView: View {
                         .padding(.horizontal, 16)
                         .padding(.vertical, 12)
                     }
-                    .glassEffect(.regular, in: .rect(cornerRadius: 14))
+                    .compatGlass(in: .rect(cornerRadius: 14))
                 }
 
                 // Footer section
                 VStack(alignment: .leading, spacing: 6) {
+                    Text("About Extensions")
+                        .font(.headline)
+                        .padding(.bottom, 2)
+
                     Text("Extensions are loaded at launch via the native WebKit extension API. Changes take effect after restarting Kaset.")
                         .foregroundStyle(.secondary)
 
@@ -156,6 +159,7 @@ struct ExtensionsSettingsView: View {
             }
             .buttonStyle(.plain)
             .help("Remove extension")
+            .accessibilityLabel("Remove \(ext.name)")
         }
         .padding(.vertical, 12)
         .padding(.horizontal, 16)

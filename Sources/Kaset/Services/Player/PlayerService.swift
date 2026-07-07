@@ -40,6 +40,28 @@ final class PlayerService: NSObject, PlayerServiceProtocol {
         case one
     }
 
+    /// Shuffle mode for playback. `smart` interleaves recommended tracks.
+    enum ShuffleMode: String, CaseIterable {
+        case off
+        case on
+        case smart
+    }
+
+    /// How the mini player was opened.
+    enum MiniPlayerMode: Equatable {
+        /// Mini player floats alongside the main app window.
+        case auxiliary
+        /// Mini player replaces the main app window until it closes.
+        case switchFromMainWindow
+    }
+
+    /// Visible mini player content size.
+    enum MiniPlayerPanel: Equatable {
+        case compact
+        case expanded
+        case lyrics
+    }
+
     // MARK: - Observable State
 
     /// Current playback state.
@@ -76,14 +98,42 @@ final class PlayerService: NSObject, PlayerServiceProtocol {
         self.volume == 0
     }
 
-    /// Whether shuffle mode is enabled.
-    var shuffleEnabled: Bool = false
+    /// Current shuffle mode (off / on / smart).
+    var shuffleMode: ShuffleMode = .off
+
+    /// Whether any shuffle (plain or smart) is active. Computed shim so existing
+    /// readers (WebQueueSync, UI, scripting, protocol) keep working unchanged.
+    var shuffleEnabled: Bool {
+        self.shuffleMode != .off
+    }
+
+    /// True while the rest of a playlist is still loading into the queue after playback
+    /// started. Smart Shuffle defers suggestion generation until this clears, so candidates
+    /// dedup against the complete playlist instead of only the first loaded batch.
+    var isQueueLoading: Bool = false
+
+    /// Monotonic token identifying the current deferred-load stream. Bumped whenever a new
+    /// playback replaces the queue, so a stale deferred load (e.g. a playlist still paging when
+    /// the user starts a different one) can detect it has been superseded and stand down instead
+    /// of clobbering the new playback's loading state. Not observed by the UI.
+    @ObservationIgnored var queueLoadGeneration = 0
 
     /// Current repeat mode.
     private(set) var repeatMode: RepeatMode = .off
 
     /// Playback queue.
     private var queueStorage: [QueueEntry] = []
+
+    /// Set when guest-startup privacy cleanup empties visible queue state but
+    /// must not delete a saved guest queue/session on the next persistence pass.
+    var suppressNextEmptyQueuePersistence = false
+
+    /// Ownership scope restored from the persisted playback session payload.
+    /// `nil` means legacy/unknown and must not be trusted across guest privacy boundaries.
+    var restoredPlaybackSessionOwnerScope: String?
+
+    static let playbackSessionScopeGuest = "guest"
+    static let playbackSessionScopeAuthenticated = "authenticated"
     var queue: [Song] {
         self.queueStorage.map(\.song)
     }
@@ -108,6 +158,21 @@ final class PlayerService: NSObject, PlayerServiceProtocol {
     /// Whether the mini player should be shown (user needs to interact to start playback).
     var showMiniPlayer: Bool = false
 
+    /// Whether the native mini player window is visible.
+    var isMiniPlayerVisible: Bool = false
+
+    /// How the native mini player was opened.
+    var miniPlayerMode: MiniPlayerMode = .auxiliary
+
+    /// Which mini player layout is active.
+    var miniPlayerPanel: MiniPlayerPanel = .compact
+
+    /// Whether closing the mini player should restore the main window.
+    var shouldRestoreMainWindowWhenMiniPlayerCloses: Bool = false
+
+    /// A consumed-on-read restore request created when a switched mini player closes.
+    var miniPlayerMainWindowRestoreRequest: Bool = false
+
     /// The video ID that needs to be played in the mini player.
     var pendingPlayVideoId: String?
 
@@ -120,6 +185,10 @@ final class PlayerService: NSObject, PlayerServiceProtocol {
 
     /// Whether a restored session is waiting for an explicit user-triggered load.
     var isPendingRestoredLoadDeferred: Bool = false
+
+    /// Whether the deferred restored load must force a full page navigation even
+    /// when the same video ID is already present in the WebView.
+    var shouldForcePendingRestoredLoad: Bool = false
 
     /// Whether launch-time session restoration is still reconciling with the player observer.
     var isRestoringPlaybackSession: Bool = false
@@ -180,12 +249,34 @@ final class PlayerService: NSObject, PlayerServiceProtocol {
 
     let logger = DiagnosticsLogger.player
     var ytMusicClient: (any YTMusicClientProtocol)?
+    var authService: AuthService?
 
     /// Continuation token for loading more songs in infinite mix/radio.
     var mixContinuationToken: String?
+    var mixContinuationRequiresAuth = false
+    var playbackRequestGeneration = 0
 
     /// Whether we're currently fetching more mix songs.
     var isFetchingMoreMixSongs: Bool = false
+
+    /// Smart Shuffle: videoIds suggested this session, for dedup across fills.
+    var smartShuffleSeenSuggestionIds: Set<String> = []
+
+    /// Smart Shuffle: seed videoIds whose radio yielded nothing new, so the filler skips them.
+    var smartShuffleExhaustedSeeds: Set<String> = []
+
+    /// Whether the smart-shuffle window filler is running (also drives the player-bar progress hint).
+    var isApplyingSmartShuffle: Bool = false
+
+    /// The in-flight suggestion fill, if any. A single stored task coalesces concurrent callers
+    /// (mode cycling, rapid advances) onto one fill loop and lets a queue replacement cancel a
+    /// stale fill, replacing the old fire-and-forget `Task {}` + boolean re-entrancy guard.
+    @ObservationIgnored var smartShuffleFillTask: Task<Void, Never>?
+
+    /// Monotonic token for the current fill. `Task` is a value type (no identity), so the spawner
+    /// captures this epoch and only clears the shared task/hint if it still owns them — a cancel or
+    /// a newer fill bumps the epoch so a stale spawner cannot stomp the live one.
+    @ObservationIgnored var smartShuffleFillEpoch = 0
 
     /// UserDefaults key for persisting queue display mode.
     static let queueDisplayModeKey = "kaset.queue.displayMode"
@@ -207,6 +298,8 @@ final class PlayerService: NSObject, PlayerServiceProtocol {
     static let volumeBeforeMuteKey = "playerVolumeBeforeMute"
     /// UserDefaults key for persisting shuffle state.
     static let shuffleEnabledKey = "playerShuffleEnabled"
+    /// UserDefaults key for persisting the tri-state shuffle mode.
+    static let shuffleModeKey = "playerShuffleMode"
     /// UserDefaults key for persisting repeat mode.
     static let repeatModeKey = "playerRepeatMode"
 
@@ -234,9 +327,21 @@ final class PlayerService: NSObject, PlayerServiceProtocol {
 
         // Restore shuffle and repeat settings if enabled in settings
         if SettingsManager.shared.rememberPlaybackSettings {
-            if UserDefaults.standard.object(forKey: Self.shuffleEnabledKey) != nil {
-                self.shuffleEnabled = UserDefaults.standard.bool(forKey: Self.shuffleEnabledKey)
-                self.logger.info("Restored shuffle state: \(self.shuffleEnabled)")
+            if let savedMode = UserDefaults.standard.string(forKey: Self.shuffleModeKey),
+               let mode = ShuffleMode(rawValue: savedMode)
+            {
+                self.shuffleMode = mode
+                self.logger.info("Restored shuffle mode: \(self.shuffleMode.rawValue)")
+            } else if UserDefaults.standard.object(forKey: Self.shuffleEnabledKey) != nil {
+                // Legacy migration: map the old bool to the new tri-state.
+                self.shuffleMode = UserDefaults.standard.bool(forKey: Self.shuffleEnabledKey) ? .on : .off
+                self.logger.info("Migrated legacy shuffle state to mode: \(self.shuffleMode.rawValue)")
+            }
+
+            // Don't resurrect smart mode if the feature has since been disabled in settings;
+            // fall back to plain shuffle (the user still wanted shuffle, just not suggestions).
+            if self.shuffleMode == .smart, !SettingsManager.shared.smartShuffleEnabled {
+                self.shuffleMode = .on
             }
 
             if let savedRepeatMode = UserDefaults.standard.string(forKey: Self.repeatModeKey) {
@@ -322,6 +427,12 @@ final class PlayerService: NSObject, PlayerServiceProtocol {
         !self.queueRedoHistory.isEmpty
     }
 
+    /// Clears queue undo/redo history at account/privacy boundaries.
+    func clearQueueUndoRedoHistory() {
+        self.queueUndoHistory.removeAll()
+        self.queueRedoHistory.removeAll()
+    }
+
     /// Records current queue state for undo (call before mutating queue). Clears redo. Keeps up to 3 states.
     func recordQueueStateForUndo() {
         let state = QueueState(entries: self.queueEntries, currentIndex: self.currentIndex)
@@ -336,6 +447,9 @@ final class PlayerService: NSObject, PlayerServiceProtocol {
     /// Restores the previous queue state. Does nothing if undo history is empty.
     func undoQueue() {
         guard let state = self.queueUndoHistory.popLast() else { return }
+        // Undo replaces the queue, so cancel Smart Shuffle fills and supersede any in-flight
+        // deferred load: otherwise stale async work can splice tracks into the restored queue.
+        self.prepareForNewPlaybackContext()
         self.queueRedoHistory.append(QueueState(entries: self.queueEntries, currentIndex: self.currentIndex))
         self.setQueue(entries: state.entries)
         self.currentIndex = min(state.currentIndex, max(0, state.entries.count - 1))
@@ -347,6 +461,8 @@ final class PlayerService: NSObject, PlayerServiceProtocol {
     /// Restores the next queue state after an undo. Does nothing if redo history is empty.
     func redoQueue() {
         guard let state = self.queueRedoHistory.popLast() else { return }
+        // Redo replaces the queue, so cancel/supersede stale async queue work (see undoQueue).
+        self.prepareForNewPlaybackContext()
         self.queueUndoHistory.append(QueueState(entries: self.queueEntries, currentIndex: self.currentIndex))
         self.setQueue(entries: state.entries)
         self.currentIndex = min(state.currentIndex, max(0, state.entries.count - 1))
@@ -371,7 +487,7 @@ final class PlayerService: NSObject, PlayerServiceProtocol {
     }
 
     func synchronizeCurrentQueueEntryID() {
-        self.currentQueueEntryID = self.queueEntries[safe: self.currentIndex]?.id
+        self.currentQueueEntryID = self.queueStorage[safe: self.currentIndex]?.id
     }
 
     /// Records the current index before `next()` moves to `newIndex` (no-op if unchanged).
@@ -400,6 +516,7 @@ final class PlayerService: NSObject, PlayerServiceProtocol {
         {
             let artist = dict["artist"] as? String ?? "Unknown Artist"
             let duration: TimeInterval? = (dict["duration"] as? Int).map { TimeInterval($0) }
+            let hasVideo = dict["hasVideo"] as? Bool
             self.currentTrack = Song(
                 id: id,
                 title: title,
@@ -407,8 +524,12 @@ final class PlayerService: NSObject, PlayerServiceProtocol {
                 album: nil,
                 duration: duration,
                 thumbnailURL: nil,
-                videoId: videoId
+                videoId: videoId,
+                hasVideo: hasVideo
             )
+            if let hasVideo {
+                self.currentTrackHasVideo = hasVideo
+            }
             self.logger.debug("Loaded mock current track: \(title)")
         }
 
@@ -430,6 +551,16 @@ final class PlayerService: NSObject, PlayerServiceProtocol {
     /// Sets the YTMusicClient for API calls (dependency injection).
     func setYTMusicClient(_ client: any YTMusicClientProtocol) {
         self.ytMusicClient = client
+    }
+
+    /// Sets the AuthService used to guard account-scoped mutations.
+    func setAuthService(_ authService: AuthService) {
+        self.authService = authService
+    }
+
+    /// Account-backed library/rating mutations should be no-ops in guest mode.
+    var canPerformAccountMutation: Bool {
+        self.authService?.hasPersonalAccount ?? false
     }
 
     /// Flag to track when a song is nearing its end.

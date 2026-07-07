@@ -14,6 +14,7 @@ final class SearchViewModel {
         didSet {
             self.searchTask?.cancel()
             self.suggestionsTask?.cancel()
+            self.allSearchEnrichmentID = nil
             if self.query != self.suppressedSuggestionsQuery {
                 self.suppressedSuggestionsQuery = nil
             }
@@ -47,7 +48,10 @@ final class SearchViewModel {
 
     /// Whether filters should be shown for the current search.
     var shouldShowFilters: Bool {
-        guard !self.query.isEmpty, self.lastSearchedQuery == self.query else {
+        guard !self.query.isEmpty,
+              self.lastSearchedQuery == self.query,
+              self.allSearchEnrichmentID == nil
+        else {
             return false
         }
 
@@ -71,9 +75,17 @@ final class SearchViewModel {
     /// Filter for result types.
     var selectedFilter: SearchFilter = .all {
         didSet {
-            if oldValue != self.selectedFilter, !self.query.isEmpty, self.lastSearchedQuery != nil {
-                // Filter changed - perform a new filtered search
+            guard oldValue != self.selectedFilter, !self.query.isEmpty else { return }
+
+            // If we've previously searched this query, perform a filtered search
+            // to get the best results for the selected filter. If no prior
+            // search exists (e.g. user typed a query but hasn't pressed Enter),
+            // perform an immediate search for the current filter so clicking
+            // filter chips always produces results.
+            if self.lastSearchedQuery != nil {
                 self.searchWithFilter()
+            } else {
+                self.searchImmediately()
             }
         }
     }
@@ -147,6 +159,17 @@ final class SearchViewModel {
     @ObservationIgnored private var suppressedSuggestionsQuery: String?
     // swiftformat:enable modifierOrder
 
+    private struct SearchAllAttempt {
+        let response: SearchResponse?
+        let error: (any Error)?
+    }
+
+    /// Non-nil while an All-filter search has published its mixed first paint
+    /// but is still awaiting dedicated category requests. Filter chips stay
+    /// hidden during this window because those category calls can still update
+    /// the shared client continuation token.
+    private var allSearchEnrichmentID: UUID?
+
     init(client: any YTMusicClientProtocol) {
         self.client = client
     }
@@ -212,6 +235,7 @@ final class SearchViewModel {
     func search() {
         self.searchTask?.cancel()
         self.suggestionsTask?.cancel()
+        self.allSearchEnrichmentID = nil
         self.suggestions = []
         self.suppressedSuggestionsQuery = self.query
         self.client.clearSearchContinuation()
@@ -236,6 +260,7 @@ final class SearchViewModel {
     func searchImmediately() {
         self.searchTask?.cancel()
         self.suggestionsTask?.cancel()
+        self.allSearchEnrichmentID = nil
         self.suggestions = []
         self.suppressedSuggestionsQuery = self.query
         self.client.clearSearchContinuation()
@@ -254,6 +279,7 @@ final class SearchViewModel {
     /// Performs a search with the current filter (no debounce, called when filter changes).
     private func searchWithFilter() {
         self.searchTask?.cancel()
+        self.allSearchEnrichmentID = nil
         self.client.clearSearchContinuation()
 
         guard !self.query.isEmpty else {
@@ -275,6 +301,15 @@ final class SearchViewModel {
         self.loadingState = .loading
         let currentQuery = self.query
         let currentFilter = self.selectedFilter
+        let allSearchEnrichmentID = currentFilter == .all ? UUID() : nil
+        if let allSearchEnrichmentID {
+            self.allSearchEnrichmentID = allSearchEnrichmentID
+        }
+        defer {
+            if let allSearchEnrichmentID, self.allSearchEnrichmentID == allSearchEnrichmentID {
+                self.allSearchEnrichmentID = nil
+            }
+        }
         self.logger.info("Searching for: \(currentQuery) with filter: \(currentFilter.rawValue)")
 
         do {
@@ -284,7 +319,7 @@ final class SearchViewModel {
                 = switch currentFilter
             {
             case .all:
-                try await self.client.search(query: currentQuery)
+                try await self.searchAll(query: currentQuery, filter: currentFilter)
             case .songs:
                 try await self.client.searchSongsWithPagination(query: currentQuery)
             case .albums:
@@ -301,23 +336,147 @@ final class SearchViewModel {
 
             // Check cancellation and query change before updating results
             // This handles the race condition where query changed during the request
-            guard !Task.isCancelled, self.query == currentQuery else {
-                self.logger.debug("Search results discarded: query changed or task cancelled")
+            guard self.isCurrentSearch(query: currentQuery, filter: currentFilter) else {
+                self.logger.debug("Search results discarded: query/filter changed or task cancelled")
                 return
             }
 
-            self.results = searchResults
-            self.lastSearchedQuery = currentQuery
-            self.lastSearchedFilter = currentFilter
-            self.loadingState = .loaded
+            self.publishSearchResults(searchResults, query: currentQuery, filter: currentFilter)
             self.logger.info("Search complete: \(searchResults.allItems.count) results, hasMore: \(searchResults.hasMore)")
         } catch {
             // CancellationError is thrown when task is cancelled during URLSession request
-            if !Task.isCancelled, self.query == currentQuery {
+            if self.isCurrentSearch(query: currentQuery, filter: currentFilter) {
                 self.logger.error("Search failed: \(error.localizedDescription)")
                 self.loadingState = .error(LoadingError(from: error))
             }
         }
+    }
+
+    private func isCurrentSearch(query: String, filter: SearchFilter) -> Bool {
+        !Task.isCancelled && self.query == query && self.selectedFilter == filter
+    }
+
+    private func publishSearchResults(_ results: SearchResponse, query: String, filter: SearchFilter) {
+        self.results = results
+        self.lastSearchedQuery = query
+        self.lastSearchedFilter = filter
+        self.loadingState = .loaded
+    }
+
+    /// Performs the broadest search for the All filter by combining the mixed search response
+    /// with the dedicated result-type searches.
+    private func searchAll(query: String, filter: SearchFilter) async throws -> SearchResponse {
+        async let mixedResults = self.attemptSearch(label: "mixed search") {
+            try await self.client.search(query: query)
+        }
+        async let songResults = self.attemptSearch(label: "songs search") {
+            try await self.client.searchSongsWithPagination(query: query)
+        }
+        async let albumResults = self.attemptSearch(label: "albums search") {
+            try await self.client.searchAlbums(query: query)
+        }
+        async let artistResults = self.attemptSearch(label: "artists search") {
+            try await self.client.searchArtists(query: query)
+        }
+        async let featuredPlaylistResults = self.attemptSearch(label: "featured playlists search") {
+            try await self.client.searchFeaturedPlaylists(query: query)
+        }
+        async let communityPlaylistResults = self.attemptSearch(label: "community playlists search") {
+            try await self.client.searchCommunityPlaylists(query: query)
+        }
+        async let podcastResults = self.attemptSearch(label: "podcasts search") {
+            try await self.client.searchPodcasts(query: query)
+        }
+
+        let mixedAttempt = await mixedResults
+        if let mixedResponse = mixedAttempt.response,
+           !mixedResponse.isEmpty,
+           self.isCurrentSearch(query: query, filter: filter)
+        {
+            self.publishSearchResults(mixedResponse, query: query, filter: filter)
+        }
+
+        let attempts = await [
+            mixedAttempt,
+            songResults,
+            albumResults,
+            artistResults,
+            featuredPlaylistResults,
+            communityPlaylistResults,
+            podcastResults,
+        ]
+
+        if let authError = attempts.compactMap(\.error).first(where: Self.isAuthenticationError) {
+            throw authError
+        }
+
+        let responses = attempts.compactMap(\.response)
+        guard !responses.isEmpty else {
+            throw attempts.compactMap(\.error).first ?? YTMusicError.unknown(message: "All-filter search failed")
+        }
+
+        return Self.mergeSearchResponses(responses)
+    }
+
+    /// Runs one All-filter search request, preserving failures so total failure still surfaces as an error.
+    private func attemptSearch(
+        label: String,
+        operation: @escaping @Sendable () async throws -> SearchResponse
+    ) async -> SearchAllAttempt {
+        do {
+            let response = try await operation()
+            return SearchAllAttempt(response: response, error: nil)
+        } catch {
+            self.logger.debug("All-filter \(label) failed: \(error.localizedDescription)")
+            return SearchAllAttempt(response: nil, error: error)
+        }
+    }
+
+    private static func isAuthenticationError(_ error: any Error) -> Bool {
+        guard let ytError = error as? YTMusicError else { return false }
+        return ytError.requiresReauth
+    }
+
+    /// Combines multiple search responses while keeping the first occurrence of each item.
+    private static func mergeSearchResponses(_ responses: [SearchResponse]) -> SearchResponse {
+        var songs: [Song] = []
+        var albums: [Album] = []
+        var artists: [Artist] = []
+        var playlists: [Playlist] = []
+        var podcastShows: [PodcastShow] = []
+
+        var seenSongIDs: Set<String> = []
+        var seenAlbumIDs: Set<String> = []
+        var seenArtistIDs: Set<String> = []
+        var seenPlaylistIDs: Set<String> = []
+        var seenPodcastIDs: Set<String> = []
+
+        for response in responses {
+            for song in response.songs where seenSongIDs.insert(song.id).inserted {
+                songs.append(song)
+            }
+            for album in response.albums where seenAlbumIDs.insert(album.id).inserted {
+                albums.append(album)
+            }
+            for artist in response.artists where seenArtistIDs.insert(artist.id).inserted {
+                artists.append(artist)
+            }
+            for playlist in response.playlists where seenPlaylistIDs.insert(playlist.id).inserted {
+                playlists.append(playlist)
+            }
+            for podcastShow in response.podcastShows where seenPodcastIDs.insert(podcastShow.id).inserted {
+                podcastShows.append(podcastShow)
+            }
+        }
+
+        return SearchResponse(
+            songs: songs,
+            albums: albums,
+            artists: artists,
+            playlists: playlists,
+            podcastShows: podcastShows,
+            continuationToken: nil
+        )
     }
 
     /// Loads more search results via continuation.
@@ -365,6 +524,7 @@ final class SearchViewModel {
         self.lastSearchedQuery = nil
         self.lastSearchedFilter = nil
         self.suppressedSuggestionsQuery = nil
+        self.allSearchEnrichmentID = nil
         self.loadingState = .idle
         self.client.clearSearchContinuation()
     }

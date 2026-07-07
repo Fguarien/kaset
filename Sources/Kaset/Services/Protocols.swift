@@ -21,6 +21,9 @@ protocol WebKitManagerProtocol: AnyObject, Sendable {
     /// Checks if the required authentication cookies exist.
     func hasAuthCookies() async -> Bool
 
+    /// Clears only authentication cookies from WebKit and persisted storage.
+    func clearAuthCookies() async
+
     /// Clears all website data (cookies, cache, etc.).
     func clearAllData() async
 
@@ -32,6 +35,11 @@ protocol WebKitManagerProtocol: AnyObject, Sendable {
 
     /// Logs all authentication-related cookies for debugging.
     func logAuthCookies() async
+
+    /// Switches the shared session's active delegated identity to the account
+    /// reached by `signinURL`, verifying via `ytcfg.DATASYNC_ID`. Throws if the
+    /// switch cannot be verified.
+    func switchSessionIdentity(to signinURL: URL, expectedBrandId: String?) async throws
 }
 
 // MARK: - YTMusicClientProtocol
@@ -185,7 +193,7 @@ protocol YTMusicClientProtocol: Sendable {
     func getPlaylistAllTracks(playlistId: String) async throws -> [Song]
 
     /// Fetches a batch of playlist tracks using the provided continuation token.
-    func getPlaylistContinuation(token: String) async throws -> PlaylistContinuationResponse
+    func getPlaylistContinuation(token: String, requiresAuth: Bool) async throws -> PlaylistContinuationResponse
 
     /// Fetches artist details including their songs and albums.
     func getArtist(id: String) async throws -> ArtistDetail
@@ -280,6 +288,13 @@ protocol YTMusicClientProtocol: Sendable {
     func fetchAccountsList() async throws -> AccountsListResponse
 }
 
+extension YTMusicClientProtocol {
+    /// Fetches a public playlist continuation by default.
+    func getPlaylistContinuation(token: String) async throws -> PlaylistContinuationResponse {
+        try await self.getPlaylistContinuation(token: token, requiresAuth: false)
+    }
+}
+
 // MARK: - AuthServiceProtocol
 
 /// Protocol defining the interface for authentication operations.
@@ -350,6 +365,18 @@ protocol PlayerServiceProtocol: AnyObject, Sendable {
     /// Whether the mini player should be shown.
     var showMiniPlayer: Bool { get set }
 
+    /// Whether the native mini player window is visible.
+    var isMiniPlayerVisible: Bool { get set }
+
+    /// How the native mini player was opened.
+    var miniPlayerMode: PlayerService.MiniPlayerMode { get set }
+
+    /// Active native mini player layout.
+    var miniPlayerPanel: PlayerService.MiniPlayerPanel { get set }
+
+    /// Whether closing the mini player should restore the main window.
+    var shouldRestoreMainWindowWhenMiniPlayerCloses: Bool { get set }
+
     /// Like status of the current track.
     var currentTrackLikeStatus: LikeStatus { get }
 
@@ -393,6 +420,23 @@ protocol PlayerServiceProtocol: AnyObject, Sendable {
 
     /// Cycles through repeat modes.
     func cycleRepeatMode()
+
+    /// Opens the native mini player.
+    func openMiniPlayer(mode: PlayerService.MiniPlayerMode)
+
+    /// Toggles the native mini player.
+    @discardableResult
+    func toggleMiniPlayer(mode: PlayerService.MiniPlayerMode) -> Bool
+
+    /// Closes the native mini player.
+    @discardableResult
+    func closeMiniPlayer() -> Bool
+
+    /// Consumes a pending request to restore the main app window.
+    func consumeMiniPlayerMainWindowRestoreRequest() -> Bool
+
+    /// Toggles compact/expanded native mini player layout.
+    func toggleMiniPlayerPanel()
 
     /// Stops playback and clears state.
     func stop() async

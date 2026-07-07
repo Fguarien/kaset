@@ -30,7 +30,6 @@ struct SongThumbnailSource: Equatable {
 /// Displays a song's thumbnail with automatic YouTube fallback.
 /// If the API-provided thumbnail URL fails to load, falls back to
 /// YouTube's public video thumbnail (`i.ytimg.com`).
-@available(macOS 26.0, *)
 struct SongThumbnailView: View {
     let song: Song
     var size: CGFloat = 48
@@ -75,8 +74,13 @@ struct SongThumbnailView: View {
         }
     }
 
+    private var targetSize: CGSize {
+        let dimension = max(self.size, 1)
+        return CGSize(width: dimension, height: dimension)
+    }
+
     var body: some View {
-        CachedAsyncImage(url: self.activeURL, onFailure: self.failureHandler) { image in
+        CachedAsyncImage(url: self.activeURL, targetSize: self.targetSize, onFailure: self.failureHandler) { image in
             image
                 .resizable()
                 .aspectRatio(contentMode: .fill)

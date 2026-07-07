@@ -106,6 +106,59 @@ struct AppLocalizationTests {
         }
     }
 
+    /// Guards against a recurrence of the French column misalignment fixed in
+    /// this PR (introduced by #160, where the `fr` values were shifted onto the
+    /// wrong keys). Asserts representative keys map to their known-good French
+    /// values both in the source catalog and via the runtime `.lproj` override
+    /// bundle, so a future shift fails CI rather than shipping silently —
+    /// mirrors `indonesianSourceCatalogMapsAffectedStrings`.
+    @Test("French source catalog maps affected strings correctly")
+    func frenchSourceCatalogMapsAffectedStrings() throws {
+        let expectedValues = [
+            ("Account", "Compte"),
+            ("Content Language", "Langue du contenu"),
+            ("About", "À propos"),
+            ("Updates", "Mises à jour"),
+            ("Command Bar", "Barre de commandes"),
+            ("Lyrics", "Paroles"),
+        ]
+
+        for (key, expectedValue) in expectedValues {
+            #expect(try self.sourceCatalogValue(key: key, localeIdentifier: "fr") == expectedValue)
+            #expect(self.localizedValue(key: key, localeIdentifier: "fr") == expectedValue)
+        }
+    }
+
+    /// Verifies the renamed account-status key resolves through the runtime
+    /// `.lproj` override bundles (not just the catalog), since the per-language
+    /// `.lproj` files are the source the language override reads at runtime.
+    @Test("Renamed signed-in status resolves in lproj override bundles")
+    func renamedSignedInStatusResolvesInLprojBundles() {
+        let expected = [
+            ("fr", "Connecté à YouTube"),
+            ("ko", "YouTube에 로그인됨"),
+            ("id", "Sudah masuk ke YouTube"),
+        ]
+        for (locale, value) in expected {
+            #expect(self.localizedValue(key: "Signed in to YouTube", localeIdentifier: locale) == value)
+        }
+    }
+
+    @Test("Smart Shuffle strings resolve from runtime lproj bundles")
+    func smartShuffleRuntimeStringsResolveFromLprojBundles() {
+        let expectedValues = [
+            ("ar", "الخلط الذكي"),
+            ("tr", "Akıllı Karıştırma"),
+            ("ko", "스마트 셔플"),
+            ("id", "Acak Cerdas"),
+            ("fr", "Lecture aléatoire intelligente"),
+        ]
+
+        for (locale, expectedValue) in expectedValues {
+            #expect(self.localizedValue(key: "Smart Shuffle", localeIdentifier: locale) == expectedValue)
+        }
+    }
+
     @Test("French bundle localizes artist and subscribe strings")
     func frenchLocalizationWorks() throws {
         let frenchBundle = try #require(self.localizedBundle(for: "fr"))

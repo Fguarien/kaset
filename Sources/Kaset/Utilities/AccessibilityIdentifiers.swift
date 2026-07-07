@@ -3,6 +3,10 @@ import Foundation
 /// Centralized accessibility identifiers for UI testing.
 /// Using an enum namespace prevents typos and enables autocomplete.
 enum AccessibilityID {
+    static func isAuxiliaryPlayerWindowIdentifier(_ identifier: String?) -> Bool {
+        identifier == VideoWindow.container || identifier == MiniPlayer.container
+    }
+
     // MARK: - Sidebar
 
     enum Sidebar {
@@ -22,7 +26,6 @@ enum AccessibilityID {
     // MARK: - PlayerBar
 
     enum PlayerBar {
-        static let container = "playerBar"
         static let playPauseButton = "playerBar.playPause"
         static let previousButton = "playerBar.previous"
         static let nextButton = "playerBar.next"
@@ -32,6 +35,7 @@ enum AccessibilityID {
         static let dislikeButton = "playerBar.dislike"
         static let lyricsButton = "playerBar.lyrics"
         static let queueButton = "playerBar.queue"
+        static let miniPlayerButton = "playerBar.miniPlayer"
         static let videoButton = "playerBar.video"
         static let airplayButton = "playerBar.airplayButton"
         static let volumeSlider = "playerBar.volumeSlider"
@@ -40,12 +44,39 @@ enum AccessibilityID {
         static let thumbnail = "playerBar.thumbnail"
     }
 
+    // MARK: - Mini Player
+
+    enum MiniPlayer {
+        static let container = "miniPlayer"
+        static let playPauseButton = "miniPlayer.playPause"
+        static let previousButton = "miniPlayer.previous"
+        static let nextButton = "miniPlayer.next"
+        static let likeButton = "miniPlayer.like"
+        static let shuffleButton = "miniPlayer.shuffle"
+        static let repeatButton = "miniPlayer.repeat"
+        static let closeButton = "miniPlayer.close"
+        static let minimizeButton = "miniPlayer.minimize"
+        static let expandButton = "miniPlayer.expand"
+        static let panelToggleButton = "miniPlayer.panelToggle"
+        static let returnToKasetButton = "miniPlayer.returnToKaset"
+        static let lyricsButton = "miniPlayer.lyrics"
+        static let lyricsView = "miniPlayer.lyricsView"
+        static let queueButton = "miniPlayer.queue"
+        static let airplayButton = "miniPlayer.airplay"
+        static let volumeButton = "miniPlayer.volumeButton"
+        static let seekSlider = "miniPlayer.seekSlider"
+        static let trackTitle = "miniPlayer.trackTitle"
+        static let trackArtist = "miniPlayer.trackArtist"
+    }
+
     // MARK: - Queue View
 
     enum Queue {
         static let container = "queueView"
         static let scrollView = "queueView.scrollView"
         static let clearButton = "queueView.clearButton"
+        static let saveToPlaylistButton = "queueView.saveToPlaylistButton"
+        static let removeDuplicatesButton = "queueView.removeDuplicatesButton"
         static let emptyState = "queueView.emptyState"
         static let refineButton = "queueView.refineButton"
         static let suggestionButton = "queueView.suggestionButton"
@@ -53,6 +84,12 @@ enum AccessibilityID {
         static func row(index: Int) -> String {
             "queueView.row.\(index)"
         }
+    }
+
+    // MARK: - Lyrics
+
+    enum Lyrics {
+        static let fallbackPanel = "lyrics.fallbackPanel"
     }
 
     // MARK: - HomeView
@@ -127,13 +164,6 @@ enum AccessibilityID {
         static func trackRow(index: Int) -> String {
             "playlistDetailView.track.\(index)"
         }
-    }
-
-    // MARK: - OnboardingView
-
-    enum Onboarding {
-        static let container = "onboardingView"
-        static let signInButton = "onboardingView.signInButton"
     }
 
     // MARK: - Main Window

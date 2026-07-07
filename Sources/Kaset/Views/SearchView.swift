@@ -3,12 +3,12 @@ import SwiftUI
 // MARK: - SearchView
 
 /// Search view for finding music.
-@available(macOS 26.0, *)
 struct SearchView: View {
     @State var viewModel: SearchViewModel
     @Environment(PlayerService.self) private var playerService
     @Environment(FavoritesManager.self) private var favoritesManager
     @Environment(SongLikeStatusManager.self) private var likeStatusManager
+    @Environment(AuthService.self) private var authService
     @Environment(LibraryViewModel.self) private var libraryViewModel: LibraryViewModel?
     @State private var navigationPath = NavigationPath()
     @State private var networkMonitor = NetworkMonitor.shared
@@ -40,10 +40,16 @@ struct SearchView: View {
                 self.contentView
             }
             .localizedNavigationTitle("Search")
-            .navigationDestinations(client: self.viewModel.client)
+            .navigationDestinations(
+                client: self.viewModel.client,
+                playerBarNavigationAction: self.playerBarNavigationAction
+            )
+            .playerBarMusicNavigation(path: self.$navigationPath)
         }
+        .playerBarMusicNavigation(path: self.$navigationPath)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             PlayerBar()
+                .playerBarMusicNavigation(path: self.$navigationPath)
         }
         .onAppear {
             self.isSearchFieldFocused = true
@@ -54,6 +60,13 @@ struct SearchView: View {
                 self.focusTrigger = false
             }
         }
+    }
+
+    private var playerBarNavigationAction: PlayerBarNavigationAction {
+        PlayerBarNavigationAction(
+            openArtist: { self.navigationPath.append($0) },
+            openAlbum: { self.navigationPath.append($0) }
+        )
     }
 
     // MARK: - Search Bar
@@ -146,7 +159,7 @@ struct SearchView: View {
             }
         }
         .padding(10)
-        .glassEffect(.regular, in: .capsule)
+        .compatGlass(in: .capsule)
     }
 
     private var suggestionsDropdown: some View {
@@ -159,7 +172,7 @@ struct SearchView: View {
                 }
             }
         }
-        .glassEffect(.regular, in: .rect(cornerRadius: 8))
+        .compatGlass(in: .rect(cornerRadius: 8))
         .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 4)
         .accessibilityIdentifier(AccessibilityID.Search.suggestionsContainer)
     }
@@ -389,7 +402,7 @@ struct SearchView: View {
 
                     // Favorite toggle for songs
                     if case let .song(song) = item {
-                        LikeButton(song: song, isRowHovered: isHovered)
+                        LikeButton(song: song, isRowHovered: isHovered, allowsActions: self.authService.hasPersonalAccount)
                     }
 
                     // Play indicator for songs
@@ -434,24 +447,32 @@ struct SearchView: View {
             Label("Play", systemImage: "play.fill")
         }
 
-        Divider()
+        if self.authService.hasPersonalAccount {
+            Divider()
 
-        FavoritesContextMenu.menuItem(for: song, manager: self.favoritesManager)
+            FavoritesContextMenu.menuItem(for: song, manager: self.favoritesManager)
 
-        Divider()
+            Divider()
 
-        LikeDislikeContextMenu(song: song, likeStatusManager: self.likeStatusManager)
+            LikeDislikeContextMenu(song: song, likeStatusManager: self.likeStatusManager)
+        }
 
         Divider()
 
         StartRadioContextMenu.menuItem(for: song, playerService: self.playerService)
 
-        Divider()
+        if self.authService.hasPersonalAccount {
+            Divider()
 
-        Button {
-            SongActionsHelper.addToLibrary(song, playerService: self.playerService)
-        } label: {
-            Label("Add to Library", systemImage: "plus.circle")
+            Button {
+                SongActionsHelper.addToLibrary(song, playerService: self.playerService)
+            } label: {
+                Label("Add to Library", systemImage: "plus.circle")
+            }
+
+            Divider()
+
+            AddToPlaylistContextMenu(song: song, client: self.viewModel.client)
         }
 
         Divider()
@@ -461,10 +482,6 @@ struct SearchView: View {
         Divider()
 
         AddToQueueContextMenu(song: song, playerService: self.playerService)
-
-        Divider()
-
-        AddToPlaylistContextMenu(song: song, client: self.viewModel.client)
 
         Divider()
 
@@ -564,19 +581,21 @@ struct SearchView: View {
 
     @ViewBuilder
     private func playlistContextMenu(_ playlist: Playlist) -> some View {
-        Button {
-            Task {
-                await SongActionsHelper.addPlaylistToLibrary(
-                    playlist,
-                    client: self.viewModel.client,
-                    libraryViewModel: self.libraryViewModel
-                )
+        if self.authService.hasPersonalAccount {
+            Button {
+                Task {
+                    await SongActionsHelper.addPlaylistToLibrary(
+                        playlist,
+                        client: self.viewModel.client,
+                        libraryViewModel: self.libraryViewModel
+                    )
+                }
+            } label: {
+                Label("Add to Library", systemImage: "plus.circle")
             }
-        } label: {
-            Label("Add to Library", systemImage: "plus.circle")
-        }
 
-        Divider()
+            Divider()
+        }
 
         FavoritesContextMenu.menuItem(for: playlist, manager: self.favoritesManager)
 

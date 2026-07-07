@@ -23,6 +23,62 @@ extension PlayerService {
         self.logger.info("Queue display mode: \(self.queueDisplayMode.displayName)")
     }
 
+    /// Opens the native mini player.
+    func openMiniPlayer(mode: MiniPlayerMode = .auxiliary) {
+        self.miniPlayerMode = mode
+        self.isMiniPlayerVisible = true
+        self.shouldRestoreMainWindowWhenMiniPlayerCloses = mode == .switchFromMainWindow
+        self.miniPlayerMainWindowRestoreRequest = false
+        self.logger.debug("Mini player opened in mode: \(String(describing: mode))")
+    }
+
+    /// Toggles the native mini player for the requested mode.
+    @discardableResult
+    func toggleMiniPlayer(mode: MiniPlayerMode = .auxiliary) -> Bool {
+        if self.isMiniPlayerVisible, self.miniPlayerMode == mode {
+            return self.closeMiniPlayer()
+        }
+
+        self.openMiniPlayer(mode: mode)
+        return false
+    }
+
+    /// Closes the native mini player and returns whether the main window should be restored.
+    @discardableResult
+    func closeMiniPlayer() -> Bool {
+        self.closeMiniPlayer(restoringMainWindow: self.shouldRestoreMainWindowWhenMiniPlayerCloses)
+    }
+
+    /// Closes the native mini player with explicit control over main window restoration.
+    @discardableResult
+    func closeMiniPlayer(restoringMainWindow shouldRestore: Bool) -> Bool {
+        self.isMiniPlayerVisible = false
+        self.miniPlayerMode = .auxiliary
+        self.shouldRestoreMainWindowWhenMiniPlayerCloses = false
+        self.miniPlayerMainWindowRestoreRequest = shouldRestore
+        self.logger.debug("Mini player closed, should restore main window: \(shouldRestore)")
+        return shouldRestore
+    }
+
+    /// Consumes a pending request to restore the main app window.
+    func consumeMiniPlayerMainWindowRestoreRequest() -> Bool {
+        let shouldRestore = self.miniPlayerMainWindowRestoreRequest
+        self.miniPlayerMainWindowRestoreRequest = false
+        return shouldRestore
+    }
+
+    /// Switches between compact and expanded mini player layouts.
+    func toggleMiniPlayerPanel() {
+        self.miniPlayerPanel = switch self.miniPlayerPanel {
+        case .compact:
+            .expanded
+        case .expanded:
+            .compact
+        case .lyrics:
+            .expanded
+        }
+    }
+
     /// Plays a track by video ID.
     func play(videoId: String) async {
         self.logger.debug("play() called with videoId: \(videoId)")
@@ -157,12 +213,17 @@ extension PlayerService {
     /// It does NOT auto-close an open video window, since hasVideo detection
     /// can be unreliable when the video element has been extracted by video mode CSS.
     func updateVideoAvailability(hasVideo: Bool) {
-        let previousValue = self.currentTrackHasVideo
-        self.currentTrackHasVideo = hasVideo
-
-        if previousValue != hasVideo {
-            self.logger.debug("Video availability updated: \(hasVideo)")
+        if UITestConfig.isUITestMode,
+           UITestConfig.environmentValue(for: UITestConfig.mockHasVideoKey) == "true",
+           !hasVideo
+        {
+            return
         }
+
+        guard self.currentTrackHasVideo != hasVideo else { return }
+
+        self.currentTrackHasVideo = hasVideo
+        self.logger.debug("Video availability updated: \(hasVideo)")
     }
 
     /// Called when video window opens to start grace period
@@ -213,7 +274,23 @@ extension PlayerService {
             return
         }
 
+        if self.isRestoringPlaybackSession {
+            self.isPendingRestoredLoadDeferred = true
+            self.shouldAutoResumeAfterRestoredLoad = false
+            self.shouldForcePendingRestoredLoad = true
+            self.state = .paused
+            if self.pendingPlayVideoId != nil {
+                SingletonPlayerWebView.shared.pause()
+            } else {
+                await self.evaluatePlayerCommand("pause")
+            }
+            return
+        }
+
         self.clearRestoredPlaybackSessionState()
+        if self.state != .ended {
+            self.state = .paused
+        }
         if self.pendingPlayVideoId != nil {
             SingletonPlayerWebView.shared.pause()
         } else {
@@ -259,7 +336,9 @@ extension PlayerService {
             self.showMiniPlayer = false
             self.state = .loading
             if SingletonPlayerWebView.shared.webView != nil {
-                SingletonPlayerWebView.shared.loadVideo(videoId: pendingPlayVideoId)
+                let strategy: SingletonPlayerWebView.VideoLoadStrategy = self.shouldForcePendingRestoredLoad ? .forceFullPageWhenSameVideoId : .standard
+                SingletonPlayerWebView.shared.loadVideo(videoId: pendingPlayVideoId, strategy: strategy)
+                self.shouldForcePendingRestoredLoad = false
             }
             return
         }
@@ -276,6 +355,28 @@ extension PlayerService {
         self.logger.debug("Skipping to next track")
         self.clearRestoredPlaybackSessionState()
         SingletonPlayerWebView.shared.setAutoplayBlocked(false)
+
+        if !self.queue.isEmpty {
+            var targetIndex: Int?
+            if self.currentIndex < self.queue.count - 1 {
+                targetIndex = self.currentIndex + 1
+            } else if self.repeatMode == .all {
+                targetIndex = 0
+            } else if self.mixContinuationToken != nil {
+                let previousCount = self.queue.count
+                await self.fetchMoreMixSongsIfNeeded()
+                if self.queue.count > previousCount {
+                    targetIndex = self.currentIndex + 1
+                }
+            }
+
+            guard let targetIndex else { return }
+            self.pushForwardSkipStackIfLeavingIndex(for: targetIndex)
+            self.advanceQueueStateForNativeNavigation(to: targetIndex)
+            await self.fillSmartShuffleWindow()
+            SingletonPlayerWebView.shared.next()
+            return
+        }
 
         // Standalone artist episodes are intentionally not in the local queue.
         // Do not let them fall through to YouTube Music's ambient next button.
@@ -295,6 +396,27 @@ extension PlayerService {
         self.clearRestoredPlaybackSessionState()
         SingletonPlayerWebView.shared.setAutoplayBlocked(false)
 
+        if !self.queue.isEmpty {
+            if self.progress > 3 {
+                await self.seek(to: 0)
+                return
+            }
+
+            if let priorIndex = self.popForwardSkipIndex(), self.queue.indices.contains(priorIndex) {
+                self.advanceQueueStateForNativeNavigation(to: priorIndex)
+                SingletonPlayerWebView.shared.previous()
+                return
+            }
+
+            if self.currentIndex > 0 {
+                self.advanceQueueStateForNativeNavigation(to: self.currentIndex - 1)
+                SingletonPlayerWebView.shared.previous()
+            } else {
+                await self.seek(to: 0)
+            }
+            return
+        }
+
         // Standalone artist episodes are intentionally not in the local queue.
         // Do not restart them or fall through to YouTube Music's ambient previous button.
         guard self.currentEpisode == nil else {
@@ -307,6 +429,36 @@ extension PlayerService {
         } else if self.pendingPlayVideoId != nil {
             SingletonPlayerWebView.shared.previous()
         }
+    }
+
+    /// Updates Kaset's local queue pointer for native WebView queue navigation without forcing a page load.
+    private func advanceQueueStateForNativeNavigation(to index: Int) {
+        guard let song = self.queue[safe: index] else { return }
+
+        let trackChanged = self.currentTrack?.videoId != song.videoId
+        self.currentIndex = index
+        self.currentTrack = song
+        self.currentEpisode = nil
+        self.pendingPlayVideoId = song.videoId
+        self.isKasetInitiatedPlayback = true
+        self.songNearingEnd = false
+        self.shouldSuppressAutoplayAfterQueueEnd = false
+        self.currentTrackHasVideo = song.musicVideoType?.hasVideoContent ?? song.hasVideo ?? false
+
+        if trackChanged {
+            self.resetTrackStatus()
+            if let cachedStatus = SongLikeStatusManager.shared.status(for: song.videoId) {
+                self.currentTrackLikeStatus = cachedStatus
+            }
+        }
+
+        if let tokens = song.feedbackTokens {
+            self.currentTrackFeedbackTokens = tokens
+            self.currentTrackInLibrary = song.isInLibrary ?? false
+            self.currentTrackLikeStatus = song.likeStatus ?? self.currentTrackLikeStatus
+        }
+
+        self.saveQueueForPersistence()
     }
 
     /// Seeks to a specific time.
@@ -360,25 +512,142 @@ extension PlayerService {
         }
     }
 
-    /// Toggles shuffle mode.
-    func toggleShuffle() {
-        self.shuffleEnabled.toggle()
-        if self.shuffleEnabled {
-            self.materializeShuffleQueueForCurrentTrack(recordUndo: true, storesOriginalOrder: true)
-        } else {
+    /// Applies a new shuffle mode, materializing or restoring the queue as needed.
+    func setShuffleMode(_ newMode: ShuffleMode) {
+        let oldMode = self.shuffleMode
+        guard newMode != oldMode else { return }
+        self.shuffleMode = newMode
+
+        // Leaving smart: cancel any in-flight fill (so it can't re-add suggestions after the strip),
+        // then strip upcoming suggestions before applying the new ordering.
+        if oldMode == .smart {
+            self.cancelSmartShuffleFill()
+            self.stripSuggestedEntries()
+            self.resetSmartShuffleState()
+        }
+
+        switch newMode {
+        case .off:
+            // If the current track is a Smart Shuffle suggestion, `stripSuggestedEntries()` keeps it
+            // above and restore appends non-snapshot entries so playback stays anchored to it.
             self.restoreQueueOrderBeforeShuffle(recordUndo: true)
+        case .on:
+            // From .off: shuffle and snapshot original order.
+            // From .smart (suggestions already stripped): reshuffle the originals in place.
+            self.materializeShuffleQueueForCurrentTrack(
+                recordUndo: true,
+                storesOriginalOrder: oldMode == .off
+            )
+        case .smart:
+            // Phase 1 (synchronous): plain shuffle so playback continues instantly.
+            // From .on, preserve the existing original-order snapshot so turning shuffle off restores
+            // playlist order rather than the already-shuffled order.
+            self.materializeShuffleQueueForCurrentTrack(
+                recordUndo: true,
+                storesOriginalOrder: oldMode == .off
+            )
+            // Phase 2 (async): fetch radio seeds and fill the suggestion window.
+            Task { await self.fillSmartShuffleWindow() }
         }
-        if SettingsManager.shared.rememberPlaybackSettings {
-            UserDefaults.standard.set(self.shuffleEnabled, forKey: Self.shuffleEnabledKey)
+
+        self.persistShuffleMode()
+        self.logger.info("Shuffle mode: \(self.shuffleMode.rawValue)")
+    }
+
+    /// Cycles the player-bar shuffle control: off -> on -> smart -> off.
+    /// When Smart Shuffle is disabled in settings, the smart state is skipped (off -> on -> off).
+    func cycleShuffleMode() {
+        let smartAvailable = SettingsManager.shared.smartShuffleEnabled
+        switch self.shuffleMode {
+        case .off: self.setShuffleMode(.on)
+        case .on: self.setShuffleMode(smartAvailable ? .smart : .off)
+        case .smart: self.setShuffleMode(.off)
         }
-        let status = self.shuffleEnabled ? "enabled" : "disabled"
-        self.logger.info("Shuffle mode: \(status)")
+    }
+
+    /// Binary shuffle toggle, preserved for menu (⌘S), mini player, AppleScript, and AI callers.
+    /// Turning shuffle "on" enables plain shuffle; turning "off" also exits smart mode.
+    func toggleShuffle() {
+        self.setShuffleMode(self.shuffleEnabled ? .off : .on)
+    }
+
+    /// Persists the current shuffle mode (and a legacy bool for downgrade compatibility).
+    func persistShuffleMode() {
+        guard SettingsManager.shared.rememberPlaybackSettings else { return }
+        UserDefaults.standard.set(self.shuffleMode.rawValue, forKey: Self.shuffleModeKey)
+        UserDefaults.standard.set(self.shuffleEnabled, forKey: Self.shuffleEnabledKey)
     }
 
     /// Cycles through repeat modes: off -> all -> one -> off.
     func cycleRepeatMode() {
         self.advanceRepeatMode()
         self.logger.info("Repeat mode: \(String(describing: self.repeatMode))")
+    }
+
+    /// Clears active playback UI/WebView state when startup resolves to guest mode.
+    ///
+    /// Unlike explicit sign-out, this preserves only persisted sessions that are
+    /// known to have been created in guest mode. Legacy/unknown sessions are
+    /// cleared because they may contain account-owned listening metadata.
+    func clearPlaybackForGuestStartup() {
+        self.logger.info("Clearing active playback state for guest startup")
+        guard self.restoredPlaybackSessionOwnerScope == Self.playbackSessionScopeGuest else {
+            self.clearSavedQueue()
+            self.clearPlaybackForPrivacyBoundary(persistEmptyQueue: true)
+            return
+        }
+        self.logger.info("Preserving restored guest-owned playback session")
+    }
+
+    /// Clears guest-owned restored playback when startup resolves to a signed-in
+    /// account. Guest Mode itself is not persisted, so a guest-owned restore must
+    /// not silently move onto the authenticated playback store.
+    func clearGuestPlaybackForAuthenticatedStartup() {
+        guard self.restoredPlaybackSessionOwnerScope == Self.playbackSessionScopeGuest else { return }
+        self.logger.info("Clearing guest-owned playback state for authenticated startup")
+        self.clearSavedQueue()
+        self.clearPlaybackForPrivacyBoundary(persistEmptyQueue: true)
+    }
+
+    /// Synchronously clears playback, queue, and WebView state at the sign-out privacy boundary.
+    func clearPlaybackForSignOut() {
+        self.logger.info("Clearing playback state for sign-out")
+        self.clearPlaybackForPrivacyBoundary(persistEmptyQueue: true)
+    }
+
+    private func clearPlaybackForPrivacyBoundary(persistEmptyQueue: Bool) {
+        self.invalidatePendingPlaybackRequests()
+        self.clearRestoredPlaybackSessionState()
+        SingletonPlayerWebView.shared.tearDown()
+        self.state = .idle
+        self.songNearingEnd = false
+        self.isKasetInitiatedPlayback = false
+        self.shouldSuppressAutoplayAfterQueueEnd = false
+        self.currentEpisode = nil
+        self.currentTrack = nil
+        self.pendingPlayVideoId = nil
+        self.progress = 0
+        self.currentTimeMs = 0
+        self.duration = 0
+        self.showMiniPlayer = false
+        self.isMiniPlayerVisible = false
+        self.showLyrics = false
+        self.showQueue = false
+        self.showVideo = false
+        self.currentTrackHasVideo = false
+        self.mixContinuationToken = nil
+        self.mixContinuationRequiresAuth = false
+        self.queueOrderBeforeShuffle = nil
+        self.clearQueueUndoRedoHistory()
+        self.currentIndex = 0
+        if !persistEmptyQueue {
+            self.suppressNextEmptyQueuePersistence = true
+        }
+        self.setQueue([])
+        self.resetTrackStatus()
+        if persistEmptyQueue {
+            self.saveQueueForPersistence()
+        }
     }
 
     /// Stops playback and clears state.

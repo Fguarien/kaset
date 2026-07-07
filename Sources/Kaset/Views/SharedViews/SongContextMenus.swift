@@ -5,12 +5,20 @@ import SwiftUI
 // MARK: - LikeDislikeContextMenu
 
 /// Reusable context menu items for like/dislike actions.
-@available(macOS 26.0, *)
 struct LikeDislikeContextMenu: View {
     let song: Song
     let likeStatusManager: SongLikeStatusManager
 
+    @Environment(AuthService.self) private var authService
+
     var body: some View {
+        if self.authService.hasPersonalAccount {
+            self.menuItems
+        }
+    }
+
+    @ViewBuilder
+    private var menuItems: some View {
         // Show Unlike if already liked, otherwise show Like
         if self.likeStatusManager.isLiked(self.song) {
             Button {
@@ -46,7 +54,6 @@ struct LikeDislikeContextMenu: View {
 // MARK: - AddToQueueContextMenu
 
 /// Reusable context menu items for adding songs to the queue.
-@available(macOS 26.0, *)
 struct AddToQueueContextMenu: View {
     let song: Song
     let playerService: PlayerService
@@ -69,10 +76,11 @@ struct AddToQueueContextMenu: View {
 // MARK: - AddToPlaylistContextMenu
 
 /// Reusable context-menu submenu for adding a song to one of the user's playlists.
-@available(macOS 26.0, *)
 struct AddToPlaylistContextMenu: View {
     let song: Song
     let client: any YTMusicClientProtocol
+
+    @Environment(AuthService.self) private var authService
 
     @State private var loadState: PlaylistLoadState = .idle
     @State private var isCreatingPlaylist = false
@@ -91,6 +99,12 @@ struct AddToPlaylistContextMenu: View {
     }
 
     var body: some View {
+        if self.authService.hasPersonalAccount {
+            self.menu
+        }
+    }
+
+    private var menu: some View {
         Menu {
             Group {
                 switch self.loadState {

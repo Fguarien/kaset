@@ -1,7 +1,6 @@
 import SwiftUI
 
 /// Sidebar navigation for the main window, styled like Apple Music.
-@available(macOS 26.0, *)
 struct Sidebar: View {
     private enum SidebarSelection: Hashable {
         case navigation(NavigationItem)
@@ -10,96 +9,78 @@ struct Sidebar: View {
 
     @Binding var selection: NavigationItem?
     @Binding var pinnedSelection: SidebarPinnedItem?
+    @Environment(AuthService.self) private var authService
     @Environment(SidebarPinnedItemsManager.self) private var sidebarPinnedItemsManager
-
-    /// Namespace for glass effect morphing.
-    @Namespace private var sidebarNamespace
+    @Environment(PodcastsAvailabilityService.self) private var podcastsAvailability
 
     var body: some View {
-        VStack(spacing: 0) {
-            GlassEffectContainer(spacing: 0) {
-                List(selection: self.sidebarSelection) {
-                    // Main navigation
-                    Section {
-                        NavigationLink(value: SidebarSelection.navigation(.search)) {
-                            Label(NavigationItem.search.displayName, systemImage: NavigationItem.search.icon)
-                        }
-                        .accessibilityIdentifier(AccessibilityID.Sidebar.searchItem)
+        List {
+            // Main navigation
+            Section {
+                self.navigationRow(.search)
+                    .accessibilityIdentifier(AccessibilityID.Sidebar.searchItem)
 
-                        NavigationLink(value: SidebarSelection.navigation(.home)) {
-                            Label(NavigationItem.home.displayName, systemImage: NavigationItem.home.icon)
-                        }
-                        .accessibilityIdentifier(AccessibilityID.Sidebar.homeItem)
-                    }
-
-                    // Discover section
-                    Section(String(localized: "Discover")) {
-                        NavigationLink(value: SidebarSelection.navigation(.explore)) {
-                            Label(NavigationItem.explore.displayName, systemImage: NavigationItem.explore.icon)
-                        }
-                        .accessibilityIdentifier(AccessibilityID.Sidebar.exploreItem)
-
-                        NavigationLink(value: SidebarSelection.navigation(.charts)) {
-                            Label(NavigationItem.charts.displayName, systemImage: NavigationItem.charts.icon)
-                        }
-                        .accessibilityIdentifier(AccessibilityID.Sidebar.chartsItem)
-
-                        NavigationLink(value: SidebarSelection.navigation(.moodsAndGenres)) {
-                            Label(NavigationItem.moodsAndGenres.displayName, systemImage: NavigationItem.moodsAndGenres.icon)
-                        }
-                        .accessibilityIdentifier(AccessibilityID.Sidebar.moodsAndGenresItem)
-
-                        NavigationLink(value: SidebarSelection.navigation(.newReleases)) {
-                            Label(NavigationItem.newReleases.displayName, systemImage: NavigationItem.newReleases.icon)
-                        }
-                        .accessibilityIdentifier(AccessibilityID.Sidebar.newReleasesItem)
-
-                        NavigationLink(value: SidebarSelection.navigation(.podcasts)) {
-                            Label(NavigationItem.podcasts.displayName, systemImage: NavigationItem.podcasts.icon)
-                        }
-                        .accessibilityIdentifier(AccessibilityID.Sidebar.podcastsItem)
-                    }
-
-                    // Collection section
-                    Section(String(localized: "Collection")) {
-                        NavigationLink(value: SidebarSelection.navigation(.library)) {
-                            Label(NavigationItem.library.displayName, systemImage: NavigationItem.library.icon)
-                        }
-                        .accessibilityIdentifier(AccessibilityID.Sidebar.libraryItem)
-
-                        NavigationLink(value: SidebarSelection.navigation(.likedMusic)) {
-                            Label(NavigationItem.likedMusic.displayName, systemImage: NavigationItem.likedMusic.icon)
-                        }
-                        .accessibilityIdentifier(AccessibilityID.Sidebar.likedMusicItem)
-
-                        NavigationLink(value: SidebarSelection.navigation(.history)) {
-                            Label(NavigationItem.history.displayName, systemImage: NavigationItem.history.icon)
-                        }
-                        .accessibilityIdentifier(AccessibilityID.Sidebar.historyItem)
-                    }
-
-                    if self.sidebarPinnedItemsManager.isVisible {
-                        Section(String(localized: "Playlists")) {
-                            ForEach(self.sidebarPinnedItemsManager.items) { item in
-                                self.sidebarPinnedRow(item)
-                            }
-                            .onMove { source, destination in
-                                self.sidebarPinnedItemsManager.move(from: source, to: destination)
-                            }
-                        }
-                    }
-                }
-                .listStyle(.sidebar)
-                .accessibilityIdentifier(AccessibilityID.Sidebar.container)
+                self.navigationRow(.home)
+                    .accessibilityIdentifier(AccessibilityID.Sidebar.homeItem)
             }
 
-            Divider()
-                .opacity(0.3)
+            // Discover section
+            Section(String(localized: "Discover")) {
+                self.navigationRow(.explore)
+                    .accessibilityIdentifier(AccessibilityID.Sidebar.exploreItem)
 
-            // Profile section at bottom
-            SidebarProfileView()
+                self.navigationRow(.charts)
+                    .accessibilityIdentifier(AccessibilityID.Sidebar.chartsItem)
+
+                self.navigationRow(.moodsAndGenres)
+                    .accessibilityIdentifier(AccessibilityID.Sidebar.moodsAndGenresItem)
+
+                self.navigationRow(.newReleases)
+                    .accessibilityIdentifier(AccessibilityID.Sidebar.newReleasesItem)
+
+                if self.podcastsAvailability.availability != .unavailable {
+                    self.navigationRow(.podcasts)
+                        .accessibilityIdentifier(AccessibilityID.Sidebar.podcastsItem)
+                }
+            }
+
+            if self.hasPersonalAccount {
+                // Collection section
+                Section(String(localized: "Collection")) {
+                    self.navigationRow(.library)
+                        .accessibilityIdentifier(AccessibilityID.Sidebar.libraryItem)
+
+                    self.navigationRow(.likedMusic)
+                        .accessibilityIdentifier(AccessibilityID.Sidebar.likedMusicItem)
+
+                    self.navigationRow(.history)
+                        .accessibilityIdentifier(AccessibilityID.Sidebar.historyItem)
+                }
+            }
+
+            if self.hasPersonalAccount, self.sidebarPinnedItemsManager.isVisible {
+                Section(String(localized: "Playlists")) {
+                    ForEach(self.sidebarPinnedItemsManager.items) { item in
+                        self.sidebarPinnedRow(item)
+                    }
+                    .onMove { source, destination in
+                        self.sidebarPinnedItemsManager.move(from: source, to: destination)
+                    }
+                }
+            }
+        }
+        .listStyle(.sidebar)
+        .compatTranslucentSidebar()
+        .accessibilityIdentifier(AccessibilityID.Sidebar.container)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            // Source toggle + profile section at bottom (shared with YouTubeSidebar)
+            SidebarFooterView()
         }
         .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 300)
+    }
+
+    private var hasPersonalAccount: Bool {
+        self.authService.hasPersonalAccount
     }
 
     private var currentSidebarSelection: SidebarSelection? {
@@ -114,38 +95,39 @@ struct Sidebar: View {
         return nil
     }
 
-    private var sidebarSelection: Binding<SidebarSelection?> {
-        Binding {
-            self.currentSidebarSelection
-        } set: { newValue in
-            guard self.currentSidebarSelection != newValue else { return }
-
-            switch newValue {
-            case let .navigation(item):
-                self.selection = item
-                self.pinnedSelection = nil
-            case let .pinned(item):
-                self.selection = nil
-                self.pinnedSelection = item
-            case nil:
-                self.selection = nil
-                self.pinnedSelection = nil
-            }
-
-            HapticService.navigation()
+    private func navigationRow(_ item: NavigationItem) -> some View {
+        KasetSidebarRow(
+            title: item.displayName,
+            systemImage: item.icon,
+            isSelected: self.currentSidebarSelection == .navigation(item)
+        ) {
+            self.selectNavigationItem(item)
         }
     }
 
+    private func selectNavigationItem(_ item: NavigationItem) {
+        let newSelection = SidebarSelection.navigation(item)
+        guard self.currentSidebarSelection != newSelection else { return }
+        self.selection = item
+        self.pinnedSelection = nil
+        HapticService.navigation()
+    }
+
+    private func selectPinnedItem(_ item: SidebarPinnedItem) {
+        let newSelection = SidebarSelection.pinned(item)
+        guard self.currentSidebarSelection != newSelection else { return }
+        self.selection = nil
+        self.pinnedSelection = item
+        HapticService.navigation()
+    }
+
     private func sidebarPinnedRow(_ item: SidebarPinnedItem) -> some View {
-        NavigationLink(value: SidebarSelection.pinned(item)) {
-            Label {
-                Text(item.title)
-                    .lineLimit(1)
-            } icon: {
-                Image(systemName: item.systemImage)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
+        KasetSidebarRow(
+            title: item.title,
+            systemImage: item.systemImage,
+            isSelected: self.currentSidebarSelection == .pinned(item)
+        ) {
+            self.selectPinnedItem(item)
         }
         .contextMenu {
             Button {
@@ -186,9 +168,10 @@ struct Sidebar: View {
     }
 }
 
-@available(macOS 26.0, *)
 #Preview {
     Sidebar(selection: .constant(.home), pinnedSelection: .constant(nil))
         .frame(width: 220)
+        .environment(AuthService())
         .environment(SidebarPinnedItemsManager(skipLoad: true))
+        .environment(PodcastsAvailabilityService())
 }

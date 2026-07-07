@@ -2,7 +2,6 @@ import SwiftUI
 
 /// View displaying the user's YouTube Music listening history.
 /// Fetches history from the API and displays songs grouped by time period.
-@available(macOS 26.0, *)
 struct HistoryView: View {
     @State var viewModel: HistoryViewModel
     @Environment(PlayerService.self) private var playerService
@@ -52,10 +51,16 @@ struct HistoryView: View {
                     .disabled(self.isRefreshing)
                 }
             }
-            .navigationDestinations(client: self.viewModel.client)
+            .navigationDestinations(
+                client: self.viewModel.client,
+                playerBarNavigationAction: self.playerBarNavigationAction
+            )
+            .playerBarMusicNavigation(path: self.$navigationPath)
         }
+        .playerBarMusicNavigation(path: self.$navigationPath)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             PlayerBar()
+                .playerBarMusicNavigation(path: self.$navigationPath)
         }
         .task {
             if self.viewModel.loadingState == .idle {
@@ -72,6 +77,13 @@ struct HistoryView: View {
         .refreshable {
             await self.performRefresh()
         }
+    }
+
+    private var playerBarNavigationAction: PlayerBarNavigationAction {
+        PlayerBarNavigationAction(
+            openArtist: { self.navigationPath.append($0) },
+            openAlbum: { self.navigationPath.append($0) }
+        )
     }
 
     /// Refreshes with visual feedback: spinning icon → data swap.

@@ -3,6 +3,8 @@ import Foundation
 import Testing
 @testable import Kaset
 
+// MARK: - YTMusicClientTests
+
 /// Tests for YTMusicClient.
 @Suite(.tags(.api))
 struct YTMusicClientTests {
@@ -235,5 +237,296 @@ struct YTMusicClientTests {
 
         // Should not throw for valid ID
         try await mockClient.unsubscribeFromPodcast(showId: "MPSPPLXz2p9abc123")
+    }
+}
+
+// MARK: - YTMusicAPIKeyResolverTests
+
+/// Tests for runtime resolution of the YouTube Music web client API key.
+@Suite(.serialized, .tags(.api))
+struct YTMusicAPIKeyResolverTests {
+    @Test("Extracts Innertube API key from web client HTML")
+    @MainActor
+    func extractsInnertubeAPIKey() {
+        let html = #"ytcfg.set({"INNERTUBE_API_KEY":"mock-token","INNERTUBE_API_VERSION":"v1"});"#
+
+        #expect(YTMusicAPIKeyResolver.extractInnertubeAPIKey(from: html) == "mock-token")
+    }
+
+    @Test("Environment override is trimmed and avoids network fetch")
+    @MainActor
+    func environmentOverrideAvoidsNetworkFetch() async throws {
+        let session = MockURLProtocol.makeMockSession()
+        MockURLProtocol.setRequestHandler(for: session) { _ in
+            throw URLError(.badServerResponse)
+        }
+        defer {
+            MockURLProtocol.reset(session: session)
+        }
+
+        let resolver = YTMusicAPIKeyResolver(
+            session: session,
+            environment: { name in
+                name == YTMusicAPIKeyResolver.environmentVariable ? "  mock-token\n" : nil
+            }
+        )
+
+        let apiKey = try await resolver.resolve()
+
+        #expect(apiKey == "mock-token")
+    }
+
+    @Test("Fetches and caches API key from mocked web client HTML")
+    @MainActor
+    func fetchesAndCachesAPIKeyFromHTML() async throws {
+        let session = MockURLProtocol.makeMockSession()
+        let html = #"ytcfg.set({"INNERTUBE_API_KEY":"mock-token"});"#
+        nonisolated(unsafe) var requestCount = 0
+
+        MockURLProtocol.setRequestHandler(for: session) { request in
+            requestCount += 1
+            guard let url = request.url,
+                  let response = HTTPURLResponse(
+                      url: url,
+                      statusCode: 200,
+                      httpVersion: nil,
+                      headerFields: ["Content-Type": "text/html"]
+                  )
+            else {
+                throw URLError(.badURL)
+            }
+
+            return (response, Data(html.utf8))
+        }
+        defer {
+            MockURLProtocol.reset(session: session)
+        }
+
+        let resolver = YTMusicAPIKeyResolver(session: session, environment: { _ in nil })
+
+        let first = try await resolver.resolve()
+        let second = try await resolver.resolve()
+
+        #expect(first == "mock-token")
+        #expect(second == "mock-token")
+        #expect(requestCount == 1)
+    }
+
+    @Test("API key fetch is cookieless and sends consent cookie")
+    @MainActor
+    func apiKeyFetchIsCookielessAndSendsConsentCookie() async throws {
+        let session = MockURLProtocol.makeMockSession()
+        let html = #"ytcfg.set({"INNERTUBE_API_KEY":"mock-html-api-key"});"#
+        nonisolated(unsafe) var observedShouldHandleCookies: Bool?
+        nonisolated(unsafe) var observedCookieHeader: String?
+        nonisolated(unsafe) var observedUserAgent: String?
+
+        MockURLProtocol.requestHandler = { request in
+            observedShouldHandleCookies = request.httpShouldHandleCookies
+            observedCookieHeader = request.value(forHTTPHeaderField: "Cookie")
+            observedUserAgent = request.value(forHTTPHeaderField: "User-Agent")
+
+            guard let url = request.url,
+                  let response = HTTPURLResponse(
+                      url: url,
+                      statusCode: 200,
+                      httpVersion: nil,
+                      headerFields: ["Content-Type": "text/html"]
+                  )
+            else {
+                throw URLError(.badURL)
+            }
+
+            return (response, Data(html.utf8))
+        }
+        defer {
+            MockURLProtocol.reset()
+        }
+
+        let resolver = YTMusicAPIKeyResolver(session: session, environment: { _ in nil })
+
+        let apiKey = try await resolver.resolve()
+
+        #expect(apiKey == "mock-html-api-key")
+        #expect(observedShouldHandleCookies == false)
+        #expect(observedCookieHeader == "SOCS=CAI")
+        #expect(observedUserAgent == APISessionConfiguration.userAgent)
+    }
+
+    @Test("HTTP failures map to YTMusic API errors")
+    @MainActor
+    func httpFailureMapsToAPIError() async throws {
+        let session = MockURLProtocol.makeMockSession()
+        MockURLProtocol.setRequestHandler(for: session) { request in
+            guard let url = request.url,
+                  let response = HTTPURLResponse(
+                      url: url,
+                      statusCode: 503,
+                      httpVersion: nil,
+                      headerFields: ["Content-Type": "text/html"]
+                  )
+            else {
+                throw URLError(.badURL)
+            }
+
+            return (response, Data("temporarily unavailable".utf8))
+        }
+        defer {
+            MockURLProtocol.reset(session: session)
+        }
+
+        let resolver = YTMusicAPIKeyResolver(session: session, environment: { _ in nil })
+
+        do {
+            _ = try await resolver.resolve()
+            Issue.record("Expected resolver to throw for HTTP 503")
+        } catch let error as YTMusicError {
+            guard case let .apiError(_, code) = error else {
+                Issue.record("Expected apiError, got \(error)")
+                return
+            }
+            #expect(code == 503)
+        }
+    }
+
+    @Test("HTML without API key maps to parse error")
+    @MainActor
+    func missingAPIKeyMapsToParseError() async throws {
+        let session = MockURLProtocol.makeMockSession()
+        MockURLProtocol.setRequestHandler(for: session) { request in
+            guard let url = request.url,
+                  let response = HTTPURLResponse(
+                      url: url,
+                      statusCode: 200,
+                      httpVersion: nil,
+                      headerFields: ["Content-Type": "text/html"]
+                  )
+            else {
+                throw URLError(.badURL)
+            }
+
+            return (response, Data("<html></html>".utf8))
+        }
+        defer {
+            MockURLProtocol.reset(session: session)
+        }
+
+        let resolver = YTMusicAPIKeyResolver(session: session, environment: { _ in nil })
+
+        do {
+            _ = try await resolver.resolve()
+            Issue.record("Expected resolver to throw for missing API key")
+        } catch let error as YTMusicError {
+            guard case .parseError = error else {
+                Issue.record("Expected parseError, got \(error)")
+                return
+            }
+        }
+    }
+}
+
+// MARK: - YTMusicClientContinuationResetTests
+
+@Suite(.serialized, .tags(.api))
+@MainActor
+struct YTMusicClientContinuationResetTests {
+    @Test("Stale home continuation cannot repopulate page cursor after reset")
+    func staleHomeContinuationCannotRepopulatePageCursorAfterReset() async throws {
+        let session = MockURLProtocol.makeMockSession()
+        nonisolated(unsafe) var requestCount = 0
+        nonisolated(unsafe) var continuationRequestCount = 0
+
+        MockURLProtocol.setRequestHandler(for: session) { request in
+            guard let url = request.url else { throw URLError(.badURL) }
+
+            if request.httpMethod == "GET" {
+                let response = try #require(
+                    HTTPURLResponse(
+                        url: url,
+                        statusCode: 200,
+                        httpVersion: nil,
+                        headerFields: ["Content-Type": "text/html"]
+                    )
+                )
+                return (response, Data(#"ytcfg.set({"INNERTUBE_API_KEY":"mock-token"});"#.utf8))
+            }
+
+            requestCount += 1
+            let payload: [String: Any]
+            if requestCount == 2 {
+                continuationRequestCount += 1
+                Thread.sleep(forTimeInterval: 0.15)
+                payload = Self.homeContinuationPayload(nextCursor: "page-2")
+            } else {
+                payload = Self.homePayload(cursor: "page-1")
+            }
+
+            let data = try JSONSerialization.data(withJSONObject: payload)
+            let response = try #require(
+                HTTPURLResponse(
+                    url: url,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )
+            )
+            return (response, data)
+        }
+        defer { MockURLProtocol.reset(session: session) }
+
+        let authService = AuthService(webKitManager: MockWebKitManager())
+        let client = YTMusicClient(authService: authService, session: session)
+
+        _ = try await client.getHome()
+        async let staleContinuation = client.getHomeContinuation()
+        try? await Task.sleep(for: .milliseconds(30))
+        client.resetSessionStateForAccountSwitch()
+
+        let staleResult = try await staleContinuation
+        let secondResult = try await client.getHomeContinuation()
+
+        #expect(staleResult == nil)
+        #expect(secondResult == nil)
+        #expect(continuationRequestCount == 1)
+    }
+
+    // swiftlint:disable:next modifier_order
+    private nonisolated static func homePayload(cursor: String) -> [String: Any] {
+        [
+            "contents": [
+                "singleColumnBrowseResultsRenderer": [
+                    "tabs": [[
+                        "tabRenderer": [
+                            "content": [
+                                "sectionListRenderer": [
+                                    "contents": [],
+                                    "continuations": [[
+                                        "nextContinuationData": [
+                                            "continuation": cursor,
+                                        ],
+                                    ]],
+                                ],
+                            ],
+                        ],
+                    ]],
+                ],
+            ],
+        ]
+    }
+
+    // swiftlint:disable:next modifier_order
+    private nonisolated static func homeContinuationPayload(nextCursor: String) -> [String: Any] {
+        [
+            "continuationContents": [
+                "sectionListContinuation": [
+                    "contents": [],
+                    "continuations": [[
+                        "nextContinuationData": [
+                            "continuation": nextCursor,
+                        ],
+                    ]],
+                ],
+            ],
+        ]
     }
 }

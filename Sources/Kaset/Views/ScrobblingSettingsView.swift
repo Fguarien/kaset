@@ -4,14 +4,23 @@ import SwiftUI
 
 /// Settings view for scrobbling services.
 /// Iterates all registered services from the coordinator, rendering a reusable row for each.
-@available(macOS 26.0, *)
 struct ScrobblingSettingsView: View {
     @Environment(ScrobblingCoordinator.self) private var coordinator
 
     var body: some View {
         Form {
-            ForEach(self.coordinator.services, id: \.serviceName) { service in
-                ScrobbleServiceRow(service: service)
+            if self.coordinator.services.isEmpty {
+                Section {
+                    ContentUnavailableView(
+                        "No Scrobbling Services",
+                        systemImage: "music.note.list",
+                        description: Text("No scrobbling services are available to configure.")
+                    )
+                }
+            } else {
+                ForEach(self.coordinator.services, id: \.serviceName) { service in
+                    ScrobbleServiceRow(service: service)
+                }
             }
         }
         .formStyle(.grouped)
@@ -23,7 +32,6 @@ struct ScrobblingSettingsView: View {
 // MARK: - ScrobbleServiceRow
 
 /// A reusable settings row for any scrobbling service backend.
-@available(macOS 26.0, *)
 struct ScrobbleServiceRow: View {
     let service: any ScrobbleServiceProtocol
     @State private var settings = SettingsManager.shared

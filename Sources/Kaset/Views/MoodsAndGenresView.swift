@@ -1,7 +1,6 @@
 import SwiftUI
 
 /// Moods & Genres view for browsing music by mood or genre.
-@available(macOS 26.0, *)
 struct MoodsAndGenresView: View {
     @State var viewModel: MoodsAndGenresViewModel
     @Environment(PlayerService.self) private var playerService
@@ -33,10 +32,16 @@ struct MoodsAndGenresView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .localizedNavigationTitle("Moods & Genres")
-            .navigationDestinations(client: self.viewModel.client)
+            .navigationDestinations(
+                client: self.viewModel.client,
+                playerBarNavigationAction: self.playerBarNavigationAction
+            )
+            .playerBarMusicNavigation(path: self.$navigationPath)
         }
+        .playerBarMusicNavigation(path: self.$navigationPath)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             PlayerBar()
+                .playerBarMusicNavigation(path: self.$navigationPath)
         }
         .onAppear {
             if self.viewModel.loadingState == .idle {
@@ -48,6 +53,13 @@ struct MoodsAndGenresView: View {
         .refreshable {
             await self.viewModel.refresh()
         }
+    }
+
+    private var playerBarNavigationAction: PlayerBarNavigationAction {
+        PlayerBarNavigationAction(
+            openArtist: { self.navigationPath.append($0) },
+            openAlbum: { self.navigationPath.append($0) }
+        )
     }
 
     // MARK: - Views
@@ -67,7 +79,8 @@ struct MoodsAndGenresView: View {
                             self.sectionView(section)
                         }
                     }
-                    .padding(.horizontal, 24)
+                    // Edge-to-edge so shelves slide under the glass sidebar;
+                    // resting inset is restored per-shelf via contentInset.
                     .padding(.vertical, 20)
                 }
             }
@@ -75,25 +88,43 @@ struct MoodsAndGenresView: View {
     }
 
     private func sectionView(_ section: HomeSection) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        CarouselShelfSection(
+            accessibilityLabel: section.title,
+            items: Array(section.items.enumerated()),
+            id: \.element.id,
+            itemAlignment: .top,
+            contentInset: DetailContentLayout.horizontalInset
+        ) {
             Text(section.title)
                 .font(.title2)
                 .fontWeight(.semibold)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(alignment: .top, spacing: 16) {
-                    ForEach(Array(section.items.enumerated()), id: \.element.id) { index, item in
-                        HomeSectionItemCard(item: item) {
-                            self.playItem(item, in: section, at: index)
-                        }
-                    }
-                }
+        } itemContent: { index, item in
+            HomeSectionItemCard(
+                item: item,
+                playAction: self.playlistPlayAction(for: item)
+            ) {
+                self.playItem(item, in: section, at: index)
             }
-            .scrollClipDisabled()
         }
     }
 
     // MARK: - Actions
+
+    private func playlistPlayAction(for item: HomeSectionItem) -> (() -> Void)? {
+        guard case let .playlist(playlist) = item,
+              SongActionsHelper.canQuickPlayPlaylist(playlist)
+        else {
+            return nil
+        }
+
+        return {
+            SongActionsHelper.playPlaylist(
+                playlist,
+                client: self.viewModel.client,
+                playerService: self.playerService
+            )
+        }
+    }
 
     private func playItem(_ item: HomeSectionItem, in _: HomeSection, at _: Int) {
         switch item {
@@ -124,4 +155,5 @@ struct MoodsAndGenresView: View {
     let client = YTMusicClient(authService: authService, webKitManager: .shared)
     MoodsAndGenresView(viewModel: MoodsAndGenresViewModel(client: client))
         .environment(PlayerService())
+        .environment(authService)
 }

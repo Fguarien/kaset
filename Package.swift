@@ -7,7 +7,7 @@ let package = Package(
     name: "Kaset",
     defaultLocalization: "en",
     platforms: [
-        .macOS(.v26),
+        .macOS("15.4"),
     ],
     products: [
         .executable(
@@ -29,8 +29,23 @@ let package = Package(
             dependencies: [
                 .product(name: "Sparkle", package: "Sparkle"),
             ],
+            exclude: [
+                "Resources/AppIcon.icon",
+                "Resources/kaset.icns",
+                // The checked-in .lproj files are the SwiftPM/Xcode 26 runtime
+                // resources. build-app.sh compiles the source catalog for the
+                // packaged app to avoid duplicate .strings outputs in SwiftPM.
+                "Resources/Localizable.xcstrings",
+            ],
             resources: [
-                .process("Resources"),
+                .process("Resources/Assets.xcassets"),
+                .process("Resources/ar.lproj"),
+                .process("Resources/en.lproj"),
+                .process("Resources/fr.lproj"),
+                .process("Resources/id.lproj"),
+                .process("Resources/ko.lproj"),
+                .process("Resources/tr.lproj"),
+                .process("Resources/Kaset.sdef"),
                 .copy("Extensions"),
             ],
             swiftSettings: [
@@ -49,6 +64,23 @@ let package = Package(
         .testTarget(
             name: "KasetTests",
             dependencies: ["Kaset"],
+            // Tests for Apple-Intelligence-powered features are excluded
+            // because the underlying APIs are macOS 26+ only and Swift
+            // Testing's `@Test` / `@Suite` macros do not compose with
+            // `@available(macOS 26, *)`.
+            exclude: [
+                "AIErrorHandlerTests.swift",
+                "AIToolTests.swift",
+                "CommandBarViewModelTests.swift",
+                "CommandExecutorTests.swift",
+                "CommandIntentParserTests.swift",
+                "FoundationModelsOptimizedPromptIntegrationTests.swift",
+                "FoundationModelsPromptLibraryTests.swift",
+                "FoundationModelsServiceTests.swift",
+                "FoundationModelsTests.swift",
+                "MusicIntentIntegrationTests.swift",
+                "MusicIntentTests.swift",
+            ],
             resources: [
                 .process("Fixtures"),
             ],

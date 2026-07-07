@@ -1,3 +1,4 @@
+// swiftlint:disable file_length
 import Foundation
 import Testing
 @testable import Kaset
@@ -5,6 +6,7 @@ import Testing
 /// Tests for PlaylistDetailViewModel using mock client.
 @Suite(.serialized, .tags(.viewModel), .timeLimit(.minutes(1)))
 @MainActor
+// swiftlint:disable:next type_body_length
 struct PlaylistDetailViewModelTests {
     var mockClient: MockYTMusicClient
     var viewModel: PlaylistDetailViewModel
@@ -37,6 +39,22 @@ struct PlaylistDetailViewModelTests {
         )
         self.mockClient.playlistDetails[playlist.id] = detail
         return PlaylistDetailViewModel(playlist: playlist, client: self.mockClient)
+    }
+
+    private func waitUntil(
+        _ condition: @autoclosure () -> Bool,
+        description: String,
+        timeout: Duration = .seconds(3)
+    ) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now + timeout
+
+        while clock.now < deadline {
+            if condition() { return }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+
+        Issue.record("Timed out waiting for \(description)")
     }
 
     // MARK: - Initial State Tests
@@ -132,6 +150,10 @@ struct PlaylistDetailViewModelTests {
         ]
 
         await likedMusicViewModel.load()
+        await self.waitUntil(
+            self.mockClient.getPlaylistContinuationCallCount == 2 && likedMusicViewModel.playlistDetail?.tracks.count == 5,
+            description: "Liked Music background continuation drain"
+        )
 
         #expect(self.mockClient.getPlaylistContinuationCallCount == 2)
         #expect(likedMusicViewModel.playlistDetail?.tracks.map(\.videoId) == [
@@ -141,6 +163,31 @@ struct PlaylistDetailViewModelTests {
             "liked-4",
             "liked-5",
         ])
+        #expect(likedMusicViewModel.playlistDetail?.tracks.allSatisfy { $0.likeStatus == .like } == true)
+        #expect(likedMusicViewModel.hasMore == false)
+    }
+
+    @Test("Liked Music load returns before delayed continuation drain")
+    func likedMusicLoadReturnsBeforeDelayedContinuationDrain() async {
+        let initialTracks = [
+            TestFixtures.makeSong(id: "liked-1", title: "Liked 1"),
+            TestFixtures.makeSong(id: "liked-2", title: "Liked 2"),
+        ]
+        let likedMusicViewModel = self.makeLikedMusicViewModel(with: initialTracks)
+        self.mockClient.playlistContinuationTracks[LikedMusicPlaylist.id] = [
+            [TestFixtures.makeSong(id: "liked-3", title: "Liked 3")],
+        ]
+        self.mockClient.playlistContinuationDelay = .milliseconds(200)
+
+        await likedMusicViewModel.load()
+
+        #expect(likedMusicViewModel.playlistDetail?.tracks.map(\.videoId) == ["liked-1", "liked-2"])
+        #expect(self.mockClient.getPlaylistContinuationReturnCount == 0)
+
+        await self.waitUntil(
+            likedMusicViewModel.playlistDetail?.tracks.map(\.videoId) == ["liked-1", "liked-2", "liked-3"],
+            description: "Liked Music delayed continuation drain"
+        )
         #expect(likedMusicViewModel.playlistDetail?.tracks.allSatisfy { $0.likeStatus == .like } == true)
         #expect(likedMusicViewModel.hasMore == false)
     }
@@ -168,11 +215,334 @@ struct PlaylistDetailViewModelTests {
         ]
 
         await self.viewModel.load()
+        await self.waitUntil(
+            self.mockClient.getPlaylistContinuationCallCount == 2 && self.viewModel.playlistDetail?.tracks.count == 125,
+            description: "large playlist background continuation drain"
+        )
 
         #expect(self.mockClient.getPlaylistContinuationCallCount == 2)
         #expect(self.viewModel.playlistDetail?.tracks.count == 125)
         #expect(self.viewModel.playlistDetail?.trackCount == 125)
         #expect(self.viewModel.hasMore == false)
+    }
+
+    @Test("Large playlist load returns before delayed full continuation drain")
+    func largePlaylistLoadReturnsBeforeDelayedFullContinuationDrain() async {
+        let playlist = Playlist(
+            id: "VL-test-playlist",
+            title: "Large Playlist",
+            description: nil,
+            thumbnailURL: URL(string: "https://example.com/playlist.jpg"),
+            trackCount: 125,
+            author: Artist.inline(name: "Test User", namespace: "playlist-author")
+        )
+        let initialTracks = TestFixtures.makeSongs(count: 100)
+        let detail = PlaylistDetail(playlist: playlist, tracks: initialTracks, duration: nil)
+        self.mockClient.playlistDetails[playlist.id] = detail
+        self.mockClient.playlistContinuationTracks[playlist.id] = [
+            (100 ..< 125).map { index in
+                TestFixtures.makeSong(id: "video-\(index)", title: "Song \(index)")
+            },
+        ]
+        self.mockClient.playlistContinuationDelay = .milliseconds(200)
+
+        await self.viewModel.load()
+
+        #expect(self.viewModel.playlistDetail?.tracks.count == 100)
+        #expect(self.mockClient.getPlaylistContinuationReturnCount == 0)
+
+        await self.waitUntil(
+            self.viewModel.playlistDetail?.tracks.count == 125,
+            description: "large playlist delayed continuation drain"
+        )
+        #expect(self.viewModel.hasMore == false)
+    }
+
+    @Test("Load more during background full drain does not cancel drain")
+    func loadMoreDuringBackgroundFullDrainDoesNotCancelDrain() async {
+        let playlist = Playlist(
+            id: "VL-test-playlist",
+            title: "Large Playlist",
+            description: nil,
+            thumbnailURL: URL(string: "https://example.com/playlist.jpg"),
+            trackCount: 125,
+            author: Artist.inline(name: "Test User", namespace: "playlist-author")
+        )
+        let initialTracks = TestFixtures.makeSongs(count: 100)
+        let detail = PlaylistDetail(playlist: playlist, tracks: initialTracks, duration: nil)
+        self.mockClient.playlistDetails[playlist.id] = detail
+        self.mockClient.playlistContinuationTracks[playlist.id] = [
+            (100 ..< 125).map { index in
+                TestFixtures.makeSong(id: "video-\(index)", title: "Song \(index)")
+            },
+        ]
+        self.mockClient.playlistContinuationDelay = .milliseconds(200)
+
+        await self.viewModel.load()
+        await self.waitUntil(
+            self.mockClient.getPlaylistContinuationCallCount == 1,
+            description: "large playlist background drain to start"
+        )
+
+        await self.viewModel.loadMore()
+
+        await self.waitUntil(
+            self.viewModel.playlistDetail?.tracks.count == 125,
+            description: "large playlist background drain after manual load more"
+        )
+        #expect(self.mockClient.getPlaylistContinuationCallCount == 1)
+        #expect(self.viewModel.hasMore == false)
+    }
+
+    @Test("Repeated load during background continuation drain does not restart playlist")
+    func repeatedLoadDuringBackgroundContinuationDrainDoesNotRestartPlaylist() async {
+        let playlist = Playlist(
+            id: "VL-test-playlist",
+            title: "Large Playlist",
+            description: nil,
+            thumbnailURL: URL(string: "https://example.com/playlist.jpg"),
+            trackCount: 125,
+            author: Artist.inline(name: "Test User", namespace: "playlist-author")
+        )
+        let initialTracks = TestFixtures.makeSongs(count: 100)
+        let detail = PlaylistDetail(playlist: playlist, tracks: initialTracks, duration: nil)
+        self.mockClient.playlistDetails[playlist.id] = detail
+        self.mockClient.playlistContinuationTracks[playlist.id] = [
+            (100 ..< 125).map { index in
+                TestFixtures.makeSong(id: "video-\(index)", title: "Song \(index)")
+            },
+        ]
+        self.mockClient.playlistContinuationDelay = .milliseconds(200)
+
+        await self.viewModel.load()
+        await self.waitUntil(
+            self.viewModel.loadingState == .loadingMore,
+            description: "background continuation drain to enter loadingMore"
+        )
+
+        await self.viewModel.load()
+
+        #expect(self.mockClient.getPlaylistIds == [playlist.id])
+        await self.waitUntil(
+            self.viewModel.playlistDetail?.tracks.count == 125,
+            description: "background drain after repeated load"
+        )
+    }
+
+    @Test("Live-synced loaded removal is not double-counted by continuation overlap")
+    func liveSyncedLoadedRemovalIsNotDoubleCountedByContinuationOverlap() async {
+        let initialTracks = [TestFixtures.makeSong(id: "liked-1", title: "Liked 1")]
+        let likedMusicViewModel = self.makeLikedMusicViewModel(with: initialTracks, trackCount: 2)
+        self.mockClient.playlistContinuationTracks[LikedMusicPlaylist.id] = [
+            [
+                TestFixtures.makeSong(id: "liked-1", title: "Liked 1"),
+                TestFixtures.makeSong(id: "liked-2", title: "Liked 2"),
+            ],
+        ]
+        self.mockClient.playlistContinuationDelay = .milliseconds(200)
+
+        await likedMusicViewModel.load()
+        await self.waitUntil(
+            self.mockClient.getPlaylistContinuationCallCount == 1,
+            description: "overlapping delayed continuation to start"
+        )
+
+        likedMusicViewModel.handleLikeStatusChange(
+            LikeStatusEvent(videoId: "liked-1", status: .indifferent, song: nil)
+        )
+
+        await self.waitUntil(
+            likedMusicViewModel.playlistDetail?.tracks.map(\.videoId) == ["liked-2"],
+            description: "continuation drain to skip loaded unlike overlap"
+        )
+
+        #expect(likedMusicViewModel.playlistDetail?.trackCount == 1)
+        #expect(SongLikeStatusManager.shared.status(for: "liked-1") != .like)
+    }
+
+    @Test("Live-synced removal skips not-yet-loaded continuation track")
+    func liveSyncedRemovalSkipsNotYetLoadedContinuationTrack() async {
+        let initialTracks = [TestFixtures.makeSong(id: "liked-1", title: "Liked 1")]
+        let likedMusicViewModel = self.makeLikedMusicViewModel(with: initialTracks, trackCount: 3)
+        self.mockClient.playlistContinuationTracks[LikedMusicPlaylist.id] = [
+            [TestFixtures.makeSong(id: "future-unliked", title: "Future Unliked")],
+            [TestFixtures.makeSong(id: "liked-3", title: "Liked 3")],
+        ]
+        self.mockClient.playlistContinuationDelay = .milliseconds(200)
+
+        await likedMusicViewModel.load()
+        await self.waitUntil(
+            self.mockClient.getPlaylistContinuationCallCount == 1,
+            description: "first delayed continuation to start"
+        )
+
+        likedMusicViewModel.handleLikeStatusChange(
+            LikeStatusEvent(videoId: "future-unliked", status: .indifferent, song: nil)
+        )
+
+        await self.waitUntil(
+            self.mockClient.getPlaylistContinuationCallCount == 2 && likedMusicViewModel.playlistDetail?.tracks.map(\.videoId).contains("liked-3") == true,
+            description: "continuation drain to skip not-yet-loaded unlike"
+        )
+
+        let videoIds = likedMusicViewModel.playlistDetail?.tracks.map(\.videoId) ?? []
+        #expect(videoIds == ["liked-1", "liked-3"])
+        #expect(videoIds.contains("future-unliked") == false)
+        #expect(likedMusicViewModel.playlistDetail?.trackCount == 2)
+        #expect(SongLikeStatusManager.shared.status(for: "future-unliked") != .like)
+    }
+
+    @Test("Manual load more preserves live removal after background drain failure")
+    func manualLoadMorePreservesLiveRemovalAfterBackgroundDrainFailure() async {
+        let initialTracks = [TestFixtures.makeSong(id: "liked-1", title: "Liked 1")]
+        let likedMusicViewModel = self.makeLikedMusicViewModel(with: initialTracks, trackCount: 3)
+        self.mockClient.playlistContinuationTracks[LikedMusicPlaylist.id] = [
+            [TestFixtures.makeSong(id: "future-unliked", title: "Future Unliked")],
+            [TestFixtures.makeSong(id: "liked-3", title: "Liked 3")],
+        ]
+        self.mockClient.playlistContinuationDelay = .milliseconds(200)
+
+        await likedMusicViewModel.load()
+        await self.waitUntil(
+            self.mockClient.getPlaylistContinuationCallCount == 1,
+            description: "failed background continuation to start"
+        )
+        self.mockClient.shouldThrowError = YTMusicError.networkError(underlying: URLError(.timedOut))
+        await self.waitUntil(
+            self.mockClient.getPlaylistContinuationReturnCount == 1 && likedMusicViewModel.loadingState == .loaded,
+            description: "failed background continuation to return"
+        )
+        self.mockClient.shouldThrowError = nil
+        self.mockClient.playlistContinuationDelay = nil
+
+        #expect(likedMusicViewModel.hasMore == true)
+        likedMusicViewModel.handleLikeStatusChange(
+            LikeStatusEvent(videoId: "future-unliked", status: .indifferent, song: nil)
+        )
+
+        await likedMusicViewModel.loadMore()
+        await likedMusicViewModel.loadMore()
+
+        let videoIds = likedMusicViewModel.playlistDetail?.tracks.map(\.videoId) ?? []
+        #expect(videoIds == ["liked-1", "liked-3"])
+        #expect(videoIds.contains("future-unliked") == false)
+        #expect(likedMusicViewModel.playlistDetail?.trackCount == 2)
+        #expect(SongLikeStatusManager.shared.status(for: "future-unliked") != .like)
+        #expect(likedMusicViewModel.hasMore == false)
+    }
+
+    @Test("Live-synced duplicate page advances continuation drain")
+    func liveSyncedDuplicatePageAdvancesContinuationDrain() async {
+        let initialTracks = [TestFixtures.makeSong(id: "liked-1", title: "Liked 1")]
+        let likedMusicViewModel = self.makeLikedMusicViewModel(with: initialTracks)
+        self.mockClient.playlistContinuationTracks[LikedMusicPlaylist.id] = [
+            [TestFixtures.makeSong(id: "live-inserted", title: "Live Inserted")],
+            [TestFixtures.makeSong(id: "liked-3", title: "Liked 3")],
+        ]
+        self.mockClient.playlistContinuationDelay = .milliseconds(200)
+
+        await likedMusicViewModel.load()
+        await self.waitUntil(
+            self.mockClient.getPlaylistContinuationCallCount == 1,
+            description: "first delayed continuation to start"
+        )
+
+        likedMusicViewModel.handleLikeStatusChange(
+            LikeStatusEvent(
+                videoId: "live-inserted",
+                status: .like,
+                song: TestFixtures.makeSong(id: "live-inserted", title: "Live Inserted")
+            )
+        )
+
+        await self.waitUntil(
+            self.mockClient.getPlaylistContinuationCallCount == 2 && likedMusicViewModel.playlistDetail?.tracks.map(\.videoId).contains("liked-3") == true,
+            description: "continuation drain to advance past live-synced duplicate"
+        )
+
+        #expect(likedMusicViewModel.playlistDetail?.tracks.map(\.videoId) == ["live-inserted", "liked-1", "liked-3"])
+        #expect(likedMusicViewModel.hasMore == false)
+    }
+
+    @Test("Stale background continuation drain cannot mutate after refresh")
+    func staleBackgroundContinuationDrainCannotMutateAfterRefresh() async {
+        let playlist = TestFixtures.makePlaylist(id: "VL-test-playlist", title: "Refresh Playlist")
+        let initialTracks = TestFixtures.makeSongs(count: 100)
+        let initialDetail = PlaylistDetail(playlist: playlist, tracks: initialTracks, duration: nil)
+        self.mockClient.playlistDetails[playlist.id] = initialDetail
+        self.mockClient.playlistContinuationTracks[playlist.id] = [
+            [TestFixtures.makeSong(id: "stale-continuation", title: "Stale")],
+        ]
+        self.mockClient.playlistContinuationDelay = .milliseconds(200)
+
+        await self.viewModel.load()
+        await self.waitUntil(
+            self.mockClient.getPlaylistContinuationCallCount == 1,
+            description: "stale background drain to start"
+        )
+
+        let refreshedPlaylist = Playlist(
+            id: playlist.id,
+            title: playlist.title,
+            description: playlist.description,
+            thumbnailURL: playlist.thumbnailURL,
+            trackCount: 3,
+            author: playlist.author
+        )
+        self.mockClient.playlistDetails[playlist.id] = PlaylistDetail(
+            playlist: refreshedPlaylist,
+            tracks: TestFixtures.makeSongs(count: 3),
+            duration: nil
+        )
+
+        await self.viewModel.refresh()
+        await self.waitUntil(
+            self.mockClient.getPlaylistContinuationReturnCount == 1,
+            description: "stale background drain to return"
+        )
+
+        let videoIds = self.viewModel.playlistDetail?.tracks.map(\.videoId) ?? []
+        #expect(videoIds == ["video-0", "video-1", "video-2"])
+        #expect(videoIds.contains("stale-continuation") == false)
+    }
+
+    @Test("Concurrent paging callers coalesce: full load, no stall, no duplicate fetch")
+    func concurrentPagingCoalesces() async {
+        // Small playlist (10 < threshold) so load() does NOT auto-page; we drive paging explicitly
+        // to exercise the single-flight wrapper with overlapping callers.
+        let initialTracks = TestFixtures.makeSongs(count: 10) // video-0...video-9
+        let detail = PlaylistDetail(
+            playlist: TestFixtures.makePlaylist(id: "VL-test-playlist"),
+            tracks: initialTracks,
+            duration: nil
+        )
+        self.mockClient.playlistDetails["VL-test-playlist"] = detail
+        self.mockClient.playlistContinuationTracks["VL-test-playlist"] = [
+            (10 ..< 20).map { TestFixtures.makeSong(id: "video-\($0)") },
+            (20 ..< 30).map { TestFixtures.makeSong(id: "video-\($0)") },
+            (30 ..< 35).map { TestFixtures.makeSong(id: "video-\($0)") },
+        ]
+        // Widen the overlap window so the concurrent callers genuinely race.
+        self.mockClient.playlistContinuationDelay = .milliseconds(40)
+
+        await self.viewModel.load()
+        #expect(self.viewModel.hasMore)
+        #expect(self.viewModel.playlistDetail?.tracks.count == 10)
+
+        // The completion loader plus two scroll-style loadMore() calls run concurrently. With the
+        // single-flight wrapper they coalesce onto the in-flight batch instead of colliding on
+        // `loadingState` (where the loser would return a spurious false that the resilient loop
+        // mis-reads as a stall and gives up on, leaving the queue stuck at a partial count).
+        async let all: Void = self.viewModel.loadAllRemaining()
+        async let more1: Void = self.viewModel.loadMore()
+        async let more2: Void = self.viewModel.loadMore()
+        _ = await (all, more1, more2)
+
+        #expect(self.viewModel.playlistDetail?.tracks.count == 35)
+        #expect(self.viewModel.hasMore == false)
+        // Each of the 3 continuation batches is fetched exactly once — no batch skipped, and no
+        // duplicate fetch from a coalesced caller advancing the token twice.
+        #expect(self.mockClient.getPlaylistContinuationCallCount == 3)
     }
 
     @Test("Small playlist load keeps continuation lazy")
@@ -191,6 +561,36 @@ struct PlaylistDetailViewModelTests {
         #expect(self.mockClient.getPlaylistContinuationCalled == false)
         #expect(self.viewModel.playlistDetail?.tracks.count == 10)
         #expect(self.viewModel.hasMore == true)
+    }
+
+    @Test("Album load keeps continuation lazy")
+    func albumLoadKeepsContinuationLazy() async {
+        let album = Playlist(
+            id: "MPRE-test-album",
+            title: "Test Album",
+            description: nil,
+            thumbnailURL: URL(string: "https://example.com/album.jpg"),
+            trackCount: 125,
+            author: Artist.inline(name: "Test Artist", namespace: "playlist-author")
+        )
+        let albumViewModel = PlaylistDetailViewModel(playlist: album, client: self.mockClient)
+        let detail = PlaylistDetail(
+            playlist: album,
+            tracks: TestFixtures.makeSongs(count: 100),
+            duration: nil
+        )
+        self.mockClient.playlistDetails[album.id] = detail
+        self.mockClient.playlistContinuationTracks[album.id] = [
+            (100 ..< 125).map { index in
+                TestFixtures.makeSong(id: "video-\(index)", title: "Song \(index)")
+            },
+        ]
+
+        await albumViewModel.load()
+
+        #expect(self.mockClient.getPlaylistContinuationCalled == false)
+        #expect(albumViewModel.playlistDetail?.tracks.count == 100)
+        #expect(albumViewModel.hasMore == true)
     }
 
     // MARK: - Load More Tests
@@ -219,6 +619,34 @@ struct PlaylistDetailViewModelTests {
         #expect(self.viewModel.playlistDetail?.tracks.count == 7)
     }
 
+    @Test("Load more continuation auth uses loaded ownership")
+    func loadMoreContinuationAuthUsesLoadedOwnership() async {
+        let routePlaylist = TestFixtures.makePlaylist(
+            id: "VL-owned-load-more",
+            title: "Owned Load More",
+            canDelete: false
+        )
+        let loadedPlaylist = TestFixtures.makePlaylist(
+            id: routePlaylist.id,
+            title: routePlaylist.title,
+            canDelete: true
+        )
+        let viewModel = PlaylistDetailViewModel(playlist: routePlaylist, client: self.mockClient)
+        self.mockClient.playlistDetails[routePlaylist.id] = PlaylistDetail(
+            playlist: loadedPlaylist,
+            tracks: [TestFixtures.makeSong(id: "owned-initial")],
+            duration: nil
+        )
+        self.mockClient.playlistContinuationTracks[routePlaylist.id] = [
+            [TestFixtures.makeSong(id: "owned-continuation")],
+        ]
+
+        await viewModel.load()
+        await viewModel.loadMore()
+
+        #expect(self.mockClient.getPlaylistContinuationRequiresAuthFlags == [true])
+    }
+
     @Test("Load more uses the view model's own continuation token after another playlist loads")
     func loadMoreUsesOwnContinuationTokenAfterAnotherPlaylistLoads() async {
         let firstPlaylist = TestFixtures.makePlaylist(id: "VL-test-playlist", title: "First Playlist")
@@ -245,8 +673,67 @@ struct PlaylistDetailViewModelTests {
         #expect(!videoIDs.contains("other-continuation"))
     }
 
-    @Test("Load more preserves reported total track count")
-    func loadMorePreservesReportedTotalTrackCount() async {
+    @Test("Cancelled load more restores loaded state")
+    func cancelledLoadMoreRestoresLoadedState() async {
+        let playlistDetail = TestFixtures.makePlaylistDetail(
+            playlist: TestFixtures.makePlaylist(id: "VL-test-playlist"),
+            trackCount: 5
+        )
+        self.mockClient.playlistDetails["VL-test-playlist"] = playlistDetail
+        self.mockClient.playlistContinuationTracks["VL-test-playlist"] = [
+            [TestFixtures.makeSong(id: "cont-1")],
+        ]
+        self.mockClient.playlistContinuationDelay = .milliseconds(200)
+
+        await self.viewModel.load()
+        let loadMoreTask = Task { await self.viewModel.loadMore() }
+        await self.waitUntil(
+            self.viewModel.loadingState == .loadingMore,
+            description: "load more to enter loadingMore"
+        )
+
+        loadMoreTask.cancel()
+        await loadMoreTask.value
+
+        #expect(self.viewModel.loadingState == .loaded)
+        #expect(self.viewModel.playlistDetail?.tracks.count == 5)
+    }
+
+    @Test("Stale manual load more cannot mutate after refresh")
+    func staleManualLoadMoreCannotMutateAfterRefresh() async {
+        let playlistDetail = TestFixtures.makePlaylistDetail(
+            playlist: TestFixtures.makePlaylist(id: "VL-test-playlist"),
+            trackCount: 5
+        )
+        self.mockClient.playlistDetails["VL-test-playlist"] = playlistDetail
+        self.mockClient.playlistContinuationTracks["VL-test-playlist"] = [
+            [TestFixtures.makeSong(id: "stale-manual")],
+        ]
+        self.mockClient.playlistContinuationDelay = .milliseconds(200)
+
+        await self.viewModel.load()
+        let loadMoreTask = Task { await self.viewModel.loadMore() }
+        await self.waitUntil(
+            self.viewModel.loadingState == .loadingMore,
+            description: "manual loadMore to enter loadingMore"
+        )
+
+        let refreshedDetail = TestFixtures.makePlaylistDetail(
+            playlist: TestFixtures.makePlaylist(id: "VL-test-playlist"),
+            trackCount: 3
+        )
+        self.mockClient.playlistDetails["VL-test-playlist"] = refreshedDetail
+        await self.viewModel.refresh()
+        await loadMoreTask.value
+        try? await Task.sleep(for: .milliseconds(220))
+
+        let videoIds = self.viewModel.playlistDetail?.tracks.map(\.videoId) ?? []
+        #expect(videoIds == ["video-0", "video-1", "video-2"])
+        #expect(videoIds.contains("stale-manual") == false)
+    }
+
+    @Test("Continuation drain preserves reported total track count")
+    func continuationDrainPreservesReportedTotalTrackCount() async {
         let playlist = Playlist(
             id: "VL-test-playlist",
             title: "Large Playlist",
@@ -268,7 +755,10 @@ struct PlaylistDetailViewModelTests {
         self.mockClient.playlistContinuationTracks["VL-test-playlist"] = [continuationTracks]
 
         await self.viewModel.load()
-        await self.viewModel.loadMore()
+        await self.waitUntil(
+            self.viewModel.playlistDetail?.tracks.count == 150,
+            description: "reported total count continuation drain"
+        )
 
         #expect(self.viewModel.playlistDetail?.tracks.count == 150)
         #expect(self.viewModel.playlistDetail?.trackCount == 2429)

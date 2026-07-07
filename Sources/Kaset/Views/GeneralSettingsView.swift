@@ -1,9 +1,9 @@
 import SwiftUI
 
 /// Settings view for general app preferences.
-@available(macOS 26.0, *)
 struct GeneralSettingsView: View {
     @Environment(AuthService.self) private var authService
+    @Environment(AccountService.self) private var accountService
     @State private var settings = SettingsManager.shared
     @State private var cacheSize: String = .init(localized: "Calculating...")
     @State private var isClearing = false
@@ -15,7 +15,7 @@ struct GeneralSettingsView: View {
         @Bindable var updater = self.updaterService
 
         Form {
-            // MARK: - General Section
+            // MARK: - Account Section
 
             Section {
                 // Account status
@@ -31,39 +31,23 @@ struct GeneralSettingsView: View {
                     if self.authService.state.isLoggedIn {
                         Button("Sign Out") {
                             Task {
+                                await self.accountService.prepareForSignOut()
                                 await self.authService.signOut()
                             }
                         }
                     }
                 }
                 .padding(.vertical, 4)
+            } header: {
+                Text("Account")
+            }
 
-                // Now Playing Notifications
-                Toggle("Show Now Playing Notifications", isOn: self.$settings.showNowPlayingNotifications)
+            // MARK: - Behavior Section
 
+            Section {
                 // Haptic Feedback
                 Toggle("Haptic Feedback", isOn: self.$settings.hapticFeedbackEnabled)
                     .help("Provide tactile feedback for actions on Force Touch trackpads")
-
-                // Synced Lyrics
-                Toggle("Enable Synced Lyrics", isOn: self.$settings.syncedLyricsEnabled)
-                    .help("Fetch and display real-time synced lyrics when available")
-
-                // Romanization
-                Toggle("Romanize Lyrics", isOn: self.$settings.romanizationEnabled)
-                    .help("Show romanized text (romaji, pinyin, etc.) below non-Latin lyrics")
-
-                // Remember Playback Settings
-                Toggle("Remember Shuffle & Repeat", isOn: self.$settings.rememberPlaybackSettings)
-                    .help("Save shuffle and repeat settings across app restarts")
-
-                // Now Playing Controls
-                Picker("Now Playing Controls", selection: self.$settings.mediaControlStyle) {
-                    ForEach(SettingsManager.MediaControlStyle.allCases) { style in
-                        Text(style.displayName).tag(style)
-                    }
-                }
-                .help("Choose which buttons appear in the Now Playing widget in Control Center")
 
                 // Default Launch Page
                 Picker("Default Page on Launch", selection: self.$settings.defaultLaunchPage) {
@@ -71,15 +55,27 @@ struct GeneralSettingsView: View {
                         Text(page.displayName).tag(page)
                     }
                 }
+            } header: {
+                Text("Behavior")
+            }
 
+            // MARK: - Language Section
+
+            Section {
                 // Content Language
                 Picker("Content Language", selection: self.$settings.contentLanguage) {
                     ForEach(SettingsManager.ContentLanguage.allCases) { language in
                         Text(language.displayName).tag(language)
                     }
                 }
-                .help("Choose the language for the app interface")
+                .help("Choose the language for content and search results from YouTube Music")
+            } header: {
+                Text("Language")
+            }
 
+            // MARK: - Storage Section
+
+            Section {
                 // Image Cache
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
@@ -98,8 +94,24 @@ struct GeneralSettingsView: View {
                 }
                 .padding(.vertical, 4)
             } header: {
-                Text("General")
+                Text("Storage")
             }
+
+            #if DEBUG
+
+                // MARK: - Debug Section
+
+                Section {
+                    Toggle("Use Legacy macOS 15 UI", isOn: self.$settings.useLegacyMacOS15UI)
+                        .help("Force macOS 15 fallback views and materials while running on macOS 26+ for compatibility debugging")
+
+                    Text("Disables Liquid Glass, the Command Bar, and Apple Intelligence UI surfaces until toggled off.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } header: {
+                    Text("Debug")
+                }
+            #endif
 
             // MARK: - Updates Section
 
@@ -163,7 +175,7 @@ struct GeneralSettingsView: View {
     // MARK: - Computed Properties
 
     private var accountStatusText: String {
-        self.authService.state.isLoggedIn ? String(localized: "Signed in to YouTube Music") : String(localized: "Not signed in")
+        self.authService.state.isLoggedIn ? String(localized: "Signed in to YouTube") : String(localized: "Not signed in")
     }
 
     private var appVersion: String {

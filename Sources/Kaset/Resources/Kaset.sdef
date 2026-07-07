@@ -9,6 +9,13 @@
             <cocoa class="NSQuitCommand"/>
         </command>
 
+        <class name="application" code="capp" description="Kaset's top-level scripting object.">
+            <cocoa class="NSApplication"/>
+            <responds-to command="quit">
+                <cocoa method="terminate:"/>
+            </responds-to>
+        </class>
+
     </suite>
 
     <!-- Kaset Suite -->
@@ -45,7 +52,7 @@
             <direct-parameter type="integer" description="Volume level (0-100)."/>
         </command>
 
-        <command name="toggle shuffle" code="Kastshuf" description="Toggle shuffle mode.">
+        <command name="toggle shuffle" code="Kastshuf" description="Toggle shuffle on or off (binary; does not enable Smart Shuffle).">
             <cocoa class="KasetToggleShuffleCommand"/>
         </command>
 
@@ -68,6 +75,16 @@
 
         <command name="dislike track" code="Kastdslk" description="Dislike or undislike the current track.">
             <cocoa class="KasetDislikeTrackCommand"/>
+        </command>
+
+        <command name="get play queue" code="Kastgque" description="Get the current playing queue as JSON.">
+            <cocoa class="KasetGetPlayQueueCommand"/>
+            <result type="text" description="JSON string with the current playing queue."/>
+        </command>
+
+        <command name="play track at index" code="Kastplix" description="Play a specific track from the queue by its index.">
+            <cocoa class="KasetPlayTrackAtIndexCommand"/>
+            <direct-parameter type="integer" description="The 1-based index of the track in the queue to play."/>
         </command>
 
     </suite>

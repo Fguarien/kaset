@@ -6,7 +6,6 @@ import SwiftUI
 /// Displays sections of songs and playlists for the selected mood/genre.
 /// Note: This view is pushed onto an existing NavigationStack, so it uses NavigationLink
 /// to leverage the parent's navigation context.
-@available(macOS 26.0, *)
 struct MoodCategoryDetailView: View {
     @State var viewModel: MoodCategoryViewModel
     @Environment(PlayerService.self) private var playerService
@@ -59,7 +58,8 @@ struct MoodCategoryDetailView: View {
                             self.sectionView(section)
                         }
                     }
-                    .padding(.horizontal, 24)
+                    // Edge-to-edge so shelves slide under the glass sidebar;
+                    // resting inset is restored per-shelf via contentInset.
                     .padding(.vertical, 20)
                 }
             }
@@ -67,19 +67,17 @@ struct MoodCategoryDetailView: View {
     }
 
     private func sectionView(_ section: HomeSection) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        CarouselShelfSection(
+            accessibilityLabel: section.title,
+            items: section.items,
+            itemAlignment: .top,
+            contentInset: DetailContentLayout.horizontalInset
+        ) {
             Text(section.title)
                 .font(.title2)
                 .fontWeight(.semibold)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(alignment: .top, spacing: 16) {
-                    ForEach(Array(section.items.enumerated()), id: \.element.id) { _, item in
-                        self.itemView(item)
-                    }
-                }
-            }
-            .scrollClipDisabled()
+        } itemContent: { item in
+            self.itemView(item)
         }
     }
 
@@ -140,7 +138,6 @@ struct MoodCategoryDetailView: View {
 // MARK: - ItemCardContent
 
 /// A non-button card view for use inside NavigationLink.
-@available(macOS 26.0, *)
 private struct ItemCardContent: View {
     let item: HomeSectionItem
 

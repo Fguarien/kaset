@@ -3,13 +3,24 @@
 import SwiftUI
 
 /// Detail view for an artist showing their songs and albums.
-@available(macOS 26.0, *)
 struct ArtistDetailView: View { // swiftlint:disable:this type_body_length
     let artist: Artist
+    var playerBarNavigationAction: PlayerBarNavigationAction = .disabled
     @State var viewModel: ArtistDetailViewModel
     @Environment(PlayerService.self) private var playerService
+    @Environment(AuthService.self) private var authService
     @Environment(FavoritesManager.self) private var favoritesManager
     @Environment(SongLikeStatusManager.self) private var likeStatusManager
+
+    init(
+        artist: Artist,
+        viewModel: ArtistDetailViewModel,
+        playerBarNavigationAction: PlayerBarNavigationAction = .disabled
+    ) {
+        self.artist = artist
+        self.playerBarNavigationAction = playerBarNavigationAction
+        _viewModel = State(initialValue: viewModel)
+    }
 
     var body: some View {
         Group {
@@ -36,6 +47,8 @@ struct ArtistDetailView: View { // swiftlint:disable:this type_body_length
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if case .error = self.viewModel.loadingState {} else {
                 PlayerBar()
+                    .environment(\.playerBarNavigationAction, self.playerBarNavigationAction)
+                    .environment(\.playerBarCurrentArtistID, self.artist.id)
             }
         }
         .task {
@@ -55,12 +68,15 @@ struct ArtistDetailView: View { // swiftlint:disable:this type_body_length
             VStack(alignment: .leading, spacing: 24) {
                 // Header
                 self.headerView(detail)
+                    .padding(.horizontal, DetailContentLayout.horizontalInset)
 
                 Divider()
+                    .padding(.horizontal, DetailContentLayout.horizontalInset)
 
-                // Songs section
+                // Songs section (vertical list — inset like other non-shelf content)
                 if !detail.songs.isEmpty {
                     self.songsSection()
+                        .padding(.horizontal, DetailContentLayout.horizontalInset)
                 }
 
                 // Latest episodes (includes live radio streams). Episodes are
@@ -110,8 +126,12 @@ struct ArtistDetailView: View { // swiftlint:disable:this type_body_length
                     self.podcastsSection(detail.podcasts)
                 }
             }
-            .padding(24)
+            .padding(.vertical, 24)
         }
+        // The ScrollView stays edge-to-edge: non-scrolling content is inset via
+        // padding above, while horizontal shelves pass `contentInset` so their
+        // tracks reach the under-sidebar band and slide under the floating glass
+        // on macOS 26. The accent backdrop (ignores safe area) refracts through.
         .topFade(style: .contentMask)
     }
 
@@ -192,7 +212,7 @@ struct ArtistDetailView: View { // swiftlint:disable:this type_body_length
                     }
 
                     // Subscribe button
-                    if detail.channelId != nil {
+                    if detail.channelId != nil, self.hasPersonalAccount {
                         self.subscribeButton(detail)
                     }
                 }
@@ -260,7 +280,7 @@ struct ArtistDetailView: View { // swiftlint:disable:this type_body_length
                         .foregroundStyle(.white)
                 }
             }
-            .buttonStyle(.glassProminent)
+            .compatGlassProminentButton()
             .controlSize(.large)
             .disabled(self.viewModel.isSubscribing)
         }
@@ -354,7 +374,7 @@ struct ArtistDetailView: View { // swiftlint:disable:this type_body_length
                     }
 
                     // Favorite toggle
-                    LikeButton(song: song, isRowHovered: isHovered)
+                    LikeButton(song: song, isRowHovered: isHovered, allowsActions: self.hasPersonalAccount)
 
                     // Duration
                     Text(song.durationDisplay)
@@ -379,24 +399,32 @@ struct ArtistDetailView: View { // swiftlint:disable:this type_body_length
                 Label("Play", systemImage: "play.fill")
             }
 
-            Divider()
+            if self.authService.hasPersonalAccount {
+                Divider()
 
-            FavoritesContextMenu.menuItem(for: song, manager: self.favoritesManager)
+                FavoritesContextMenu.menuItem(for: song, manager: self.favoritesManager)
 
-            Divider()
+                Divider()
 
-            LikeDislikeContextMenu(song: song, likeStatusManager: self.likeStatusManager)
+                LikeDislikeContextMenu(song: song, likeStatusManager: self.likeStatusManager)
+            }
 
             Divider()
 
             StartRadioContextMenu.menuItem(for: song, playerService: self.playerService)
 
-            Divider()
+            if self.authService.hasPersonalAccount {
+                Divider()
 
-            Button {
-                SongActionsHelper.addToLibrary(song, playerService: self.playerService)
-            } label: {
-                Label("Add to Library", systemImage: "plus.circle")
+                Button {
+                    SongActionsHelper.addToLibrary(song, playerService: self.playerService)
+                } label: {
+                    Label("Add to Library", systemImage: "plus.circle")
+                }
+
+                Divider()
+
+                AddToPlaylistContextMenu(song: song, client: self.viewModel.client)
             }
 
             Divider()
@@ -406,10 +434,6 @@ struct ArtistDetailView: View { // swiftlint:disable:this type_body_length
             Divider()
 
             AddToQueueContextMenu(song: song, playerService: self.playerService)
-
-            Divider()
-
-            AddToPlaylistContextMenu(song: song, client: self.viewModel.client)
 
             // Go to Album - show if album has valid browse ID
             if let album = song.album, album.hasNavigableId {
@@ -435,53 +459,47 @@ struct ArtistDetailView: View { // swiftlint:disable:this type_body_length
         title: String = "Albums",
         shelfKind: ArtistShelfKind = .albums
     ) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        CarouselShelfSection(
+            accessibilityLabel: title,
+            items: albums,
+            contentInset: DetailContentLayout.horizontalInset
+        ) {
             self.sectionHeader(title: title, shelfKind: shelfKind)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 16) {
-                    ForEach(albums) { album in
-                        NavigationLink(value: self.playlistFromAlbum(album)) {
-                            self.albumCard(album)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
+        } itemContent: { album in
+            NavigationLink(value: self.playlistFromAlbum(album)) {
+                self.albumCard(album)
             }
+            .buttonStyle(.plain)
         }
     }
 
     private func playlistsSection(_ playlists: [Playlist], title: String) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        CarouselShelfSection(
+            accessibilityLabel: title,
+            items: playlists,
+            contentInset: DetailContentLayout.horizontalInset
+        ) {
             self.sectionHeader(title: title, shelfKind: .playlistsByArtist)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 16) {
-                    ForEach(playlists) { playlist in
-                        NavigationLink(value: playlist) {
-                            self.playlistCard(playlist)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
+        } itemContent: { playlist in
+            NavigationLink(value: playlist) {
+                self.playlistCard(playlist)
             }
+            .buttonStyle(.plain)
         }
     }
 
     private func artistsSection(_ artists: [Artist], title: String) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        CarouselShelfSection(
+            accessibilityLabel: title,
+            items: artists,
+            contentInset: DetailContentLayout.horizontalInset
+        ) {
             self.sectionHeader(title: title, shelfKind: .relatedArtists)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 16) {
-                    ForEach(artists) { artist in
-                        NavigationLink(value: artist) {
-                            self.artistCard(artist)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
+        } itemContent: { artist in
+            NavigationLink(value: artist) {
+                self.artistCard(artist)
             }
+            .buttonStyle(.plain)
         }
     }
 
@@ -632,23 +650,21 @@ struct ArtistDetailView: View { // swiftlint:disable:this type_body_length
     // MARK: - Episodes Section (Latest episodes / live radios)
 
     private func episodesSection(_ episodes: [ArtistEpisode]) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        CarouselShelfSection(
+            accessibilityLabel: String(localized: "Latest episodes"),
+            items: episodes,
+            contentInset: DetailContentLayout.horizontalInset
+        ) {
             self.sectionHeader(title: "Latest episodes", shelfKind: .episodes)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 16) {
-                    ForEach(episodes) { episode in
-                        Button {
-                            Task {
-                                await self.playerService.playEpisode(episode)
-                            }
-                        } label: {
-                            self.episodeCard(episode)
-                        }
-                        .buttonStyle(.plain)
-                    }
+        } itemContent: { episode in
+            Button {
+                Task {
+                    await self.playerService.playEpisode(episode)
                 }
+            } label: {
+                self.episodeCard(episode)
             }
+            .buttonStyle(.plain)
         }
     }
 
@@ -706,79 +722,73 @@ struct ArtistDetailView: View { // swiftlint:disable:this type_body_length
     // MARK: - Singles & EPs Section
 
     private func singlesSection(_ singles: [Album]) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        CarouselShelfSection(
+            accessibilityLabel: String(localized: "Singles & EPs"),
+            items: singles,
+            contentInset: DetailContentLayout.horizontalInset
+        ) {
             self.sectionHeader(title: "Singles & EPs", shelfKind: .singles)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 16) {
-                    ForEach(singles) { album in
-                        NavigationLink(value: self.playlistFromAlbum(album)) {
-                            self.albumCard(album)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
+        } itemContent: { album in
+            NavigationLink(value: self.playlistFromAlbum(album)) {
+                self.albumCard(album)
             }
+            .buttonStyle(.plain)
         }
     }
 
     // MARK: - Playlists by Artist Section
 
     private func playlistsByArtistSection(_ playlists: [Playlist]) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        CarouselShelfSection(
+            accessibilityLabel: String(localized: "Playlists"),
+            items: playlists,
+            contentInset: DetailContentLayout.horizontalInset
+        ) {
             self.sectionHeader(title: "Playlists", shelfKind: .playlistsByArtist)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 16) {
-                    ForEach(playlists) { playlist in
-                        NavigationLink(value: playlist) {
-                            VStack(alignment: .leading, spacing: 8) {
-                                CachedAsyncImage(url: playlist.thumbnailURL?.highQualityThumbnailURL) { image in
-                                    image
-                                        .resizable()
-                                        .aspectRatio(contentMode: .fill)
-                                } placeholder: {
-                                    Rectangle()
-                                        .fill(.quaternary)
-                                        .overlay {
-                                            Image(systemName: "music.note.list")
-                                                .font(.largeTitle)
-                                                .foregroundStyle(.secondary)
-                                        }
-                                }
-                                .frame(width: 140, height: 140)
-                                .clipShape(.rect(cornerRadius: 8))
-
-                                Text(playlist.title)
-                                    .font(.system(size: 12, weight: .medium))
-                                    .lineLimit(2)
-                                    .multilineTextAlignment(.leading)
-                                    .frame(width: 140, alignment: .leading)
+        } itemContent: { playlist in
+            NavigationLink(value: playlist) {
+                VStack(alignment: .leading, spacing: 8) {
+                    CachedAsyncImage(url: playlist.thumbnailURL?.highQualityThumbnailURL) { image in
+                        image
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                    } placeholder: {
+                        Rectangle()
+                            .fill(.quaternary)
+                            .overlay {
+                                Image(systemName: "music.note.list")
+                                    .font(.largeTitle)
+                                    .foregroundStyle(.secondary)
                             }
-                        }
-                        .buttonStyle(.plain)
                     }
+                    .frame(width: 140, height: 140)
+                    .clipShape(.rect(cornerRadius: 8))
+
+                    Text(playlist.title)
+                        .font(.system(size: 12, weight: .medium))
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                        .frame(width: 140, alignment: .leading)
                 }
             }
+            .buttonStyle(.plain)
         }
     }
 
     // MARK: - Podcasts Section
 
     private func podcastsSection(_ podcasts: [PodcastShow]) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        CarouselShelfSection(
+            accessibilityLabel: String(localized: "Podcasts"),
+            items: podcasts,
+            contentInset: DetailContentLayout.horizontalInset
+        ) {
             self.sectionHeader(title: "Podcasts", shelfKind: .podcasts)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 16) {
-                    ForEach(podcasts) { show in
-                        NavigationLink(value: show) {
-                            self.podcastCard(show)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
+        } itemContent: { show in
+            NavigationLink(value: show) {
+                self.podcastCard(show)
             }
+            .buttonStyle(.plain)
         }
     }
 
@@ -811,19 +821,17 @@ struct ArtistDetailView: View { // swiftlint:disable:this type_body_length
     // MARK: - Related Artists Section
 
     private func relatedArtistsSection(_ artists: [Artist]) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+        CarouselShelfSection(
+            accessibilityLabel: String(localized: "Fans might also like"),
+            items: artists,
+            contentInset: DetailContentLayout.horizontalInset
+        ) {
             self.sectionHeader(title: "Fans might also like", shelfKind: .relatedArtists)
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 16) {
-                    ForEach(artists) { artist in
-                        NavigationLink(value: artist) {
-                            self.relatedArtistCard(artist)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
+        } itemContent: { artist in
+            NavigationLink(value: artist) {
+                self.relatedArtistCard(artist)
             }
+            .buttonStyle(.plain)
         }
     }
 
@@ -860,6 +868,10 @@ struct ArtistDetailView: View { // swiftlint:disable:this type_body_length
             || lowercasedTitle.hasPrefix("ep")
             ? .singles
             : .albums
+    }
+
+    private var hasPersonalAccount: Bool {
+        self.authService.hasPersonalAccount
     }
 
     // MARK: - Section Header with Optional See-all

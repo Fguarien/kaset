@@ -3,7 +3,6 @@ import SwiftUI
 /// View displaying the full list of episodes (or other filtered subset) behind
 /// a `MUSIC_PAGE_TYPE_ARTIST` "See all" affordance — Latest episodes, Live
 /// performances, etc.
-@available(macOS 26.0, *)
 struct ArtistEpisodesListView: View {
     @State var viewModel: ArtistEpisodesListViewModel
     @Environment(PlayerService.self) private var playerService
@@ -53,9 +52,11 @@ struct ArtistEpisodesListView: View {
                     Divider().padding(.leading, 24)
                 }
             }
-            .padding(.horizontal, 24)
             .padding(.vertical, 16)
         }
+        // Edge-to-edge with a resting inset so the list extends under the
+        // floating glass sidebar.
+        .contentMargins(.horizontal, DetailContentLayout.horizontalInset, for: .scrollContent)
     }
 
     private func episodeRow(_ episode: ArtistEpisode) -> some View {
