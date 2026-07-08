@@ -74,8 +74,8 @@ struct PlayerServiceWebQueueSyncTests {
         #expect(self.playerService.pendingPlayVideoId == "v1")
     }
 
-    @Test("Native next does not pre-inject next-next track while WebView is still on current track")
-    func nativeNextDoesNotPreinjectNextNextTrack() async {
+    @Test("Manual next ignores native injection marker and loads target deterministically")
+    func manualNextIgnoresNativeInjectionMarkerAndLoadsTargetDeterministically() async {
         let songs = [
             Song(id: "1", title: "Song 1", artists: [], album: nil, duration: 180, thumbnailURL: nil, videoId: "v1"),
             Song(id: "2", title: "Song 2", artists: [], album: nil, duration: 200, thumbnailURL: nil, videoId: "v2"),
@@ -93,8 +93,8 @@ struct PlayerServiceWebQueueSyncTests {
         #expect(self.playerService.pendingWebQueueInjectionVideoId == nil)
     }
 
-    @Test("Native next resets progress before persisting target queue song")
-    func nativeNextResetsProgressBeforePersistingTargetQueueSong() async {
+    @Test("Manual next resets progress before persisting target queue song")
+    func manualNextResetsProgressBeforePersistingTargetQueueSong() async {
         let songs = [
             Song(id: "1", title: "Song 1", artists: [], album: nil, duration: 180, thumbnailURL: nil, videoId: "v1"),
             Song(id: "2", title: "Song 2", artists: [], album: nil, duration: 200, thumbnailURL: nil, videoId: "v2"),
@@ -113,8 +113,8 @@ struct PlayerServiceWebQueueSyncTests {
         #expect(self.playerService.duration == 200)
     }
 
-    @Test("Native next clears consumed injection marker for duplicate video IDs")
-    func nativeNextClearsConsumedInjectionMarkerForDuplicateVideoIDs() async {
+    @Test("Manual next clears consumed injection marker for duplicate video IDs")
+    func manualNextClearsConsumedInjectionMarkerForDuplicateVideoIDs() async {
         let duplicate = Song(id: "dup", title: "Duplicate", artists: [], album: nil, duration: 180, thumbnailURL: nil, videoId: "v2")
         let songs = [
             Song(id: "1", title: "Song 1", artists: [], album: nil, duration: 180, thumbnailURL: nil, videoId: "v1"),

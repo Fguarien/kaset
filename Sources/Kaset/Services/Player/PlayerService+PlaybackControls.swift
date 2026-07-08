@@ -401,16 +401,9 @@ extension PlayerService {
                 }
             }
 
-            guard let targetIndex, let targetSong = self.queue[safe: targetIndex] else { return }
+            guard let targetIndex else { return }
             self.pushForwardSkipStackIfLeavingIndex(for: targetIndex)
-            if self.injectedWebQueueVideoId == targetSong.videoId {
-                self.advanceQueueStateForNativeNavigation(to: targetIndex)
-                self.injectedWebQueueVideoId = nil
-                SingletonPlayerWebView.shared.next()
-            } else {
-                self.injectedWebQueueVideoId = nil
-                await self.loadQueueSongForNavigation(at: targetIndex)
-            }
+            await self.loadQueueSongForNavigation(at: targetIndex)
             await self.fetchMoreMixSongsIfNeeded()
             await self.fillSmartShuffleWindow()
             self.saveQueueForPersistence(syncWebQueue: false)
@@ -472,6 +465,8 @@ extension PlayerService {
     private func loadQueueSongForNavigation(at index: Int) async {
         guard let song = self.queue[safe: index] else { return }
         self.currentIndex = index
+        self.progress = 0
+        self.duration = song.duration ?? 0
         await self.play(song: song)
         self.saveQueueForPersistence()
     }
