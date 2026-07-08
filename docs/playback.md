@@ -10,7 +10,7 @@ YouTube Music uses DRM (Widevine) to protect Premium content. Native playback vi
 2. **DRM**: Premium content requires Widevine CDM, only available in WebKit
 3. **User Interaction**: YouTube requires a user gesture to start playback
 
-Our solution: A **singleton WebView** that loads YouTube Music watch pages and plays audio through WebKit's native DRM support.
+Our solution: A **singleton WebView** that keeps the YouTube Music app shell alive and plays audio through WebKit's native DRM support. When possible, Kaset uses YouTube Music's in-page router and native **Up Next** queue so track changes avoid full page reloads.
 
 ## Architecture
 
@@ -18,12 +18,13 @@ Our solution: A **singleton WebView** that loads YouTube Music watch pages and p
 
 | Component | File | Purpose |
 |-----------|------|---------|
-| `SingletonPlayerWebView` | `MiniPlayerWebView.swift` | Manages the one-and-only WebView |
+| `SingletonPlayerWebView` | `MiniPlayerWebView.swift` | Manages the one-and-only WebView and router navigation |
 | `SingletonPlayerWebView+PlaybackPreferences` | `SingletonPlayerWebView+PlaybackPreferences.swift` | Installs and refreshes playback preference user scripts |
 | `SingletonPlayerWebView+PlaybackAudioQuality` | `SingletonPlayerWebView+PlaybackAudioQuality.swift` | Applies preferred YouTube audio quality and reports diagnostics |
+| `SingletonPlayerWebView+QueueInjection` | `SingletonPlayerWebView+QueueInjection.swift` | Click-scoped Play Next injection for YouTube Music's native Up Next queue |
 | `PersistentPlayerView` | `MiniPlayerWebView.swift` | SwiftUI wrapper for the WebView |
 | `PlayerService` | `PlayerService.swift` | Playback state and control |
-| `PlayerService+WebQueueSync` | `PlayerService+WebQueueSync.swift` | Keeps native queue state authoritative when WebView events drift |
+| `PlayerService+WebQueueSync` | `PlayerService+WebQueueSync.swift` | Mirrors Kaset's expected next track into YouTube Music's native queue and reconciles WebView events |
 | `AppDelegate` | `AppDelegate.swift` | Window lifecycle for background audio |
 
 ### Singleton Pattern
@@ -60,35 +61,44 @@ This sets:
 - `pendingPlayVideoId` = video ID
 - `showMiniPlayer` = `true` (shows toast for user interaction)
 
-### 2. WebView Loads
+### 2. WebView Preloads
 
-`MainWindow` observes `pendingPlayVideoId`:
+`MainWindow` keeps a hidden `PersistentPlayerView` mounted whenever the user is
+logged in, even before a track is requested. The hidden view creates the singleton
+WebView and preloads the YouTube Music home page so the app shell and router are
+ready for later playback.
 
 ```swift
-if let videoId = playerService.pendingPlayVideoId {
-    PersistentPlayerView(videoId: videoId, isExpanded: playerService.showMiniPlayer)
-        .frame(width: showMiniPlayer ? 160 : 1, height: showMiniPlayer ? 90 : 1)
+if authService.state.isLoggedIn {
+    PersistentPlayerView(videoId: playerService.pendingPlayVideoId, isExpanded: false)
+        .frame(width: 1, height: 1)
+        .opacity(0)
 }
 ```
+
+Startup preload blocks autoplay unless the user explicitly starts playback. This
+prevents YouTube Music from resuming hidden server-side playback in the 1×1
+WebView.
 
 ### 3. Video Starts
 
 `PersistentPlayerView` either:
-- Creates new WebView (first play)
-- Reuses existing WebView (subsequent plays)
+
+- creates the singleton WebView and preloads the home page;
+- reuses the existing WebView;
+- asks `SingletonPlayerWebView.loadVideo(videoId:)` to navigate when a pending
+  video should autoload.
+
+`loadVideo(videoId:)` prefers same-document router navigation:
 
 ```swift
-func makeNSView(context: Context) -> NSView {
-    let webView = SingletonPlayerWebView.shared.getWebView(...)
-
-    // Load if different video
-    if SingletonPlayerWebView.shared.currentVideoId != videoId {
-        webView.load(URLRequest(url: watchURL))
-    }
-
-    return container
-}
+app.resolveCommand({ watchEndpoint: { videoId } })
 ```
+
+If the router is unavailable, stale, or rejects the command, Kaset falls back to
+loading `https://music.youtube.com/watch?v=<videoId>`. The router callback is
+bound to the current load generation so an older failed router attempt cannot
+full-load a stale track over a newer request.
 
 ### 4. State Updates
 
@@ -119,29 +129,38 @@ Swift validates that the ended `videoId` still matches the expected queue song
 before advancing. This prevents stale `ended` events from double-advancing the
 queue after Kaset has already loaded the next track.
 
+If Kaset previously confirmed that the expected next song was injected into
+YouTube Music's native **Up Next** queue, `handleTrackEnded(observedVideoId:)`
+lets YouTube Music auto-advance natively and only updates Kaset's queue pointer.
+If injection is missing, stale, or failed, Kaset falls back to deterministic
+`next()` / `play(song:)` navigation instead of trusting the web queue.
+
 ## Track Changing
 
-When user plays a different track:
+When the user plays a different track:
 
-1. `pendingPlayVideoId` changes
-2. SwiftUI calls `updateNSView` (not `makeNSView`)
-3. `SingletonPlayerWebView.loadVideo(videoId:)` called
-4. Current audio paused, target volume prepared, new URL loaded
+1. `pendingPlayVideoId` changes.
+2. SwiftUI updates the hidden `PersistentPlayerView`.
+3. `SingletonPlayerWebView.loadVideo(videoId:)` pauses the current element,
+   refreshes autoplay/volume bootstrap state, and tries YouTube Music's SPA
+   router.
+4. If router navigation fails and this is still the latest load generation,
+   Kaset falls back to a full watch URL load.
 
-```swift
-func loadVideo(videoId: String) {
-    guard videoId != currentVideoId else { return }
+Manual `next()` and `previous()` always update Kaset's local queue state first
+and use deterministic Kaset navigation:
 
-    // Update ID immediately to prevent duplicate loads
-    currentVideoId = videoId
+- `next()` advances to the next Kaset queue entry and uses `play(song:)` /
+  `loadVideo(videoId:)` instead of relying on YouTube Music's ambient Next
+  button. This prevents stale web queue state from repeating the current song or
+  jumping backward.
+- `previous()` uses the queue stack / restart-threshold behavior and does not
+  blindly inherit YouTube Music's ambient previous item.
+- Standalone artist episodes remain outside Kaset's local queue and ignore
+  queue-navigation fallthrough.
 
-    // Pause current, set the target volume, then load new
-    webView.evaluateJavaScript("document.querySelector('video')?.pause()") { _, _ in
-        webView.evaluateJavaScript("window.__kasetTargetVolume = currentVolume")
-        self.webView?.load(URLRequest(url: watchURL))
-    }
-}
-```
+Native **Up Next** injection is used for natural track-end auto-advance, not for
+manual Next button presses.
 
 When the WebView reports a new `videoId`, Kaset treats that as authoritative
 even if the DOM title/artist are still stale. This avoids a race where YouTube
@@ -441,6 +460,31 @@ Kaset treats its own queue as the source of truth whenever one exists:
   allowing autoplay to continue into unrelated tracks
 - In smart shuffle mode the queue may also contain ephemeral `.suggested`
   entries, which are stripped before persistence (see [Smart Shuffle](#smart-shuffle))
+
+### Native Web Queue Injection
+
+For gapless-style transitions, Kaset mirrors the current expected next song into
+YouTube Music's native **Up Next** queue:
+
+1. `syncWebQueue()` runs only when playback is stable (`.playing` or `.paused`).
+   It does not click menu items while router navigation is loading.
+2. `SingletonPlayerWebView.injectNextSong(videoId:)` opens the player-bar menu,
+   positively identifies **Play next**, and arms a click-scoped payload swap.
+3. The page reports `QUEUE_INJECTION_RESULT` back to Swift.
+4. Swift promotes `pendingWebQueueInjectionVideoId` to `injectedWebQueueVideoId`
+   only if the result still matches the currently expected next queue entry.
+5. Any deterministic navigation, queue replacement, empty queue persistence, or
+   stale result clears both Swift-side and page-side injection state.
+
+Important invariants:
+
+- A pending injection is not trusted for playback decisions.
+- A confirmed injection is consumed when natural track-end auto-advance uses it.
+- Duplicate video IDs are handled by clearing the consumed marker so the next
+  queue entry can be injected again.
+- If injection fails, times out, or becomes stale, Kaset prioritizes correctness
+  and falls back to deterministic navigation. This may not be gapless, but it
+  prevents Kaset's UI/persistence from diverging from actual playback.
 
 ## Mini Player UI
 
