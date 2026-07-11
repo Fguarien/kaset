@@ -54,6 +54,23 @@ extension PlayerServiceWebQueueSyncTests {
         #expect(self.playerService.pendingWebQueueInjectionVideoId == nil)
     }
 
+    @Test("Consumed injection marker is cleared before a same-video next occurrence")
+    func consumedMarkerClearsBeforeSameVideoNextOccurrence() async {
+        let songs = [
+            Song(id: "a", title: "A", artists: [], duration: 180, videoId: "va"),
+            Song(id: "b1", title: "B 1", artists: [], duration: 180, videoId: "vb"),
+            Song(id: "b2", title: "B 2", artists: [], duration: 180, videoId: "vb"),
+        ]
+        await self.playerService.playQueue(songs, startingAt: 1)
+        self.playerService.state = .playing
+        self.playerService.injectedWebQueueVideoId = "vb"
+
+        self.playerService.syncWebQueue()
+
+        #expect(self.playerService.injectedWebQueueVideoId == nil)
+        #expect(self.playerService.pendingWebQueueInjectionVideoId == nil)
+    }
+
     @Test("Native queue injection skips duplicate consecutive video IDs")
     func nativeQueueInjectionSkipsDuplicateVideoIDs() async {
         let duplicate = Song(
@@ -327,11 +344,13 @@ extension PlayerServiceWebQueueSyncTests {
 
         await self.playerService.playQueue(songs, startingAt: 0)
         self.playerService.duration = 180
+        self.playerService.injectedWebQueueVideoId = "v2"
 
         await self.playerService.seek(to: 180)
 
         #expect(self.playerService.currentIndex == 1)
         #expect(self.playerService.pendingPlayVideoId == "v2")
+        #expect(self.playerService.pendingNativeQueueAdvanceVideoId == nil)
     }
 
     @Test("Manual seek within end-threshold still advances queue")

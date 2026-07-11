@@ -6,6 +6,7 @@ extension SingletonPlayerWebView {
     func beginDocumentNavigation(_ navigation: WKNavigation?, in webView: WKWebView) -> Bool {
         guard webView === self.webView else { return false }
         self.activeDocumentNavigation = navigation
+        self.activeDocumentNavigationID = self.pendingDocumentID
         self.isDocumentNavigationInProgress = true
         return true
     }
@@ -35,6 +36,7 @@ extension SingletonPlayerWebView {
             return false
         }
         self.activeDocumentNavigation = nil
+        self.activeDocumentNavigationID = nil
         self.isDocumentNavigationInProgress = false
         return true
     }

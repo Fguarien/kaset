@@ -318,6 +318,7 @@ final class SingletonPlayerWebView { // swiftlint:disable:this type_body_length
     private var documentIDGeneration = 0
     var pendingDocumentID: Int?
     var activeDocumentNavigation: WKNavigation?
+    var activeDocumentNavigationID: Int?
     var isDocumentNavigationInProgress = false
 
     /// Current display mode for the WebView.
@@ -477,6 +478,7 @@ final class SingletonPlayerWebView { // swiftlint:disable:this type_body_length
         self.pendingRouterNavigation = nil
         self.pendingDocumentID = nil
         self.activeDocumentNavigation = nil
+        self.activeDocumentNavigationID = nil
         self.isDocumentNavigationInProgress = false
         self.currentVideoId = nil
         webView.evaluateJavaScript("document.querySelector('video')?.pause()", completionHandler: nil)
@@ -484,6 +486,7 @@ final class SingletonPlayerWebView { // swiftlint:disable:this type_body_length
         webView.removeFromSuperview()
         self.webKitManager?.extensionHostWebViewDidDeactivate(role: .musicPlayer)
         self.webView = nil
+        self.coordinator?.cancelPlaybackBridgeTasks()
         self.coordinator = nil
         self.currentContainer = nil
         self.usesCookieFreeDataStore = nil
@@ -808,6 +811,9 @@ final class SingletonPlayerWebView { // swiftlint:disable:this type_body_length
         private var documentGeneration = 0
         private var activeDocumentID: Int?
         private var playbackBridgeTask: Task<Void, Never>?
+        private var playbackBridgeTaskID: UInt64 = 0
+        private var playbackBridgeTailTaskID: UInt64?
+        private var playbackBridgeTasks: [UInt64: Task<Void, Never>] = [:]
 
         init(playerService: PlayerService) {
             self.playerService = playerService
@@ -881,7 +887,16 @@ final class SingletonPlayerWebView { // swiftlint:disable:this type_body_length
             operation: @escaping @MainActor (Coordinator) async -> Void
         ) {
             let previousTask = self.playbackBridgeTask
-            self.playbackBridgeTask = Task { @MainActor [weak self] in
+            self.playbackBridgeTaskID &+= 1
+            let taskID = self.playbackBridgeTaskID
+            let task = Task { @MainActor [weak self] in
+                defer {
+                    self?.playbackBridgeTasks[taskID] = nil
+                    if self?.playbackBridgeTailTaskID == taskID {
+                        self?.playbackBridgeTask = nil
+                        self?.playbackBridgeTailTaskID = nil
+                    }
+                }
                 _ = await previousTask?.value
                 guard let self,
                       !Task.isCancelled,
@@ -891,6 +906,18 @@ final class SingletonPlayerWebView { // swiftlint:disable:this type_body_length
                 }
                 await operation(self)
             }
+            self.playbackBridgeTask = task
+            self.playbackBridgeTailTaskID = taskID
+            self.playbackBridgeTasks[taskID] = task
+        }
+
+        func cancelPlaybackBridgeTasks() {
+            for task in self.playbackBridgeTasks.values {
+                task.cancel()
+            }
+            self.playbackBridgeTasks.removeAll()
+            self.playbackBridgeTask = nil
+            self.playbackBridgeTailTaskID = nil
         }
 
         private static func isDocumentScopedMessage(_ type: String) -> Bool {
@@ -1180,9 +1207,8 @@ final class SingletonPlayerWebView { // swiftlint:disable:this type_body_length
             guard SingletonPlayerWebView.shared.commitDocumentNavigation(navigation, in: webView) else {
                 return
             }
-            self.playbackBridgeTask?.cancel()
-            self.playbackBridgeTask = nil
-            self.activeDocumentID = SingletonPlayerWebView.shared.pendingDocumentID
+            self.cancelPlaybackBridgeTasks()
+            self.activeDocumentID = SingletonPlayerWebView.shared.activeDocumentNavigationID
             self.documentGeneration &+= 1
         }
 
@@ -1388,8 +1414,11 @@ private extension SingletonPlayerWebView.Coordinator {
             lastAcceptedMediaGeneration: self.lastAcceptedMediaGeneration
         )
 
+        let mediaMatches = self.playerService.observedPlaybackMatchesCurrentTarget(
+            videoId: mediaVideoId
+        )
         guard shouldApplyPlaybackState,
-              self.playerService.observedPlaybackMatchesCurrentTarget(videoId: mediaVideoId),
+              mediaMatches,
               shouldAcceptMediaState
         else {
             return

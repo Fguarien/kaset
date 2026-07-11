@@ -80,33 +80,6 @@ extension PlayerService {
         }
     }
 
-    /// Distance from `duration` at which a manual seek is treated as the end of the track.
-    /// `video.currentTime = duration` does not reliably fire `ended` in WebKit, and a subsequent
-    /// play call would restart the same song from 0 instead of advancing.
-    static let seekToEndThreshold: TimeInterval = 0.5
-
-    /// Routes a manual seek that landed at the end of the track through the track-ended path so
-    /// repeat / queue / autoplay-suppression rules apply consistently with a natural end.
-    func handleManualSeekToEnd() async {
-        self.logger.info("Manual seek reached end of track; routing through track-ended path")
-        self.clearRestoredPlaybackSessionState()
-        self.progress = self.duration
-
-        if self.shouldSynchronizeWebViewForTerminalManualSeekToEnd {
-            SingletonPlayerWebView.shared.seekAndPause(to: self.duration)
-        }
-
-        await self.handleTrackEnded(observedVideoId: self.currentTrack?.videoId)
-    }
-
-    private var shouldSynchronizeWebViewForTerminalManualSeekToEnd: Bool {
-        if self.queue.isEmpty {
-            return !(self.repeatMode == .one && (self.currentTrack != nil || self.pendingPlayVideoId != nil))
-        }
-
-        return !self.canAdvanceNativeQueueAfterTrackEnd
-    }
-
     private func normalizedObservedVideoId(_ videoId: String?) -> String? {
         guard let videoId, !videoId.isEmpty else { return nil }
         return videoId
@@ -156,17 +129,17 @@ extension PlayerService {
             return
         }
 
-        guard self.injectedWebQueueVideoId != nextSong.videoId,
-              self.pendingWebQueueInjectionVideoId != nextSong.videoId
-        else { return }
-
         // Duplicate video IDs need an explicit in-place restart so the media
-        // generation advances with the queue entry. Do not trust native Up Next
-        // for a same-ID transition.
+        // generation advances with the queue entry. Clear any marker consumed by
+        // the preceding occurrence before checking cached target IDs.
         guard nextSong.videoId != sourceVideoId else {
             self.clearWebQueueInjectionState()
             return
         }
+
+        guard self.injectedWebQueueVideoId != nextSong.videoId,
+              self.pendingWebQueueInjectionVideoId != nextSong.videoId
+        else { return }
 
         self.pendingWebQueueInjectionVideoId = nextSong.videoId
         self.webQueueInjectionGeneration &+= 1
@@ -239,7 +212,7 @@ extension PlayerService {
         self.logger.info("Synced web queue: confirmed \(videoId) to play next natively")
     }
 
-    private var canAdvanceNativeQueueAfterTrackEnd: Bool {
+    var canAdvanceNativeQueueAfterTrackEnd: Bool {
         self.shuffleEnabled
             || self.repeatMode == .one
             || self.currentIndex < self.queue.count - 1
@@ -443,6 +416,15 @@ extension PlayerService {
         return true
     }
 
+    private func commitObservedQueueTrack(to index: Int, videoId: String) {
+        self.clearWebQueueInjectionState()
+        self.clearPendingNativeQueueAdvance()
+        self.pushForwardSkipStackIfLeavingIndex(for: index)
+        self.advanceQueueStateForNativeNavigation(to: index)
+        SingletonPlayerWebView.shared.currentVideoId = videoId
+        self.saveQueueForPersistence(syncWebQueue: false)
+    }
+
     private func handleNearEndTrackChangeIfNeeded(
         observedVideoId: String?,
         title: String,
@@ -481,9 +463,11 @@ extension PlayerService {
                 return true
             }
 
-            self.currentIndex = expectedNextIndex
+            self.commitObservedQueueTrack(
+                to: expectedNextIndex,
+                videoId: expectedNextTrack.videoId
+            )
             self.logger.info("Track advanced to queue index \(expectedNextIndex)")
-            self.saveQueueForPersistence()
 
             if self.shouldKeepQueueMetadata(title: title, artist: artist, song: expectedNextTrack) {
                 self.logger.debug(
@@ -610,9 +594,8 @@ extension PlayerService {
         {
             let queueIndexChanged = matchingIndex != self.currentIndex
             if queueIndexChanged {
-                self.currentIndex = matchingIndex
+                self.commitObservedQueueTrack(to: matchingIndex, videoId: observedVideoId)
                 self.logger.info("Observed playback moved to queue index \(matchingIndex), realigning native queue")
-                self.saveQueueForPersistence()
             }
 
             if queueIndexChanged || self.shouldKeepQueueMetadata(title: title, artist: artist, song: matchingSong) {

@@ -739,6 +739,8 @@ struct PlayerServiceWebQueueSyncTests {
         #expect(self.playerService.currentIndex == 2)
         #expect(self.playerService.currentTrack?.videoId == "v3")
         #expect(self.playerService.currentTrack?.title == "Song 3")
+        #expect(self.playerService.pendingPlayVideoId == "v3")
+        #expect(self.playerService.progress == 0)
     }
 
     @Test("Track end wraps to the first queue song when repeat all is enabled")
