@@ -148,12 +148,14 @@ extension PlayerService {
 
     /// Fetches more songs for the current mix when approaching the end of the queue.
     /// This enables "infinite mix" behavior like YouTube Music web.
-    func fetchMoreMixSongsIfNeeded() async {
+    func fetchMoreMixSongsIfNeeded(
+        shouldApplyResult: @MainActor () -> Bool = { true }
+    ) async {
         let songsRemaining = self.queue.count - self.currentIndex - 1
         self.logger.debug("Infinite mix check: \(songsRemaining) songs remaining, hasContinuation: \(self.mixContinuationToken != nil)")
 
         // Only fetch if we have a continuation token and we're near the end
-        guard let token = mixContinuationToken,
+        guard let continuation = mixContinuationToken,
               !isFetchingMoreMixSongs,
               !(self.mixContinuationRequiresAuth && self.authService?.hasPersonalAccount != true),
               let client = ytMusicClient
@@ -171,9 +173,12 @@ extension PlayerService {
         let requestGeneration = self.playbackRequestGeneration
 
         do {
-            let result = try await client.getMixQueueContinuation(continuationToken: token)
-            guard requestGeneration == self.playbackRequestGeneration else {
-                self.logger.info("Discarding stale mix continuation after privacy boundary")
+            let result = try await client.getMixQueueContinuation(continuationToken: continuation)
+            guard !Task.isCancelled,
+                  requestGeneration == self.playbackRequestGeneration,
+                  shouldApplyResult()
+            else {
+                self.logger.info("Discarding stale or cancelled mix continuation")
                 self.isFetchingMoreMixSongs = false
                 return
             }

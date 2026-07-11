@@ -19,7 +19,7 @@ struct MainWindow: View { // swiftlint:disable:this type_body_length
         static let commandBarTopPadding: CGFloat = 72
     }
 
-    static func shouldMountPersistentPlayer(isLoggedIn: Bool, pendingVideoId: String?) -> Bool {
+    nonisolated static func shouldMountPersistentPlayer(isLoggedIn: Bool, pendingVideoId: String?) -> Bool {
         isLoggedIn || pendingVideoId != nil
     }
 

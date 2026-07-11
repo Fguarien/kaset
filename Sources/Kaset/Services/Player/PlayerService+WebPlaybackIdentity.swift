@@ -251,7 +251,9 @@ extension PlayerService {
         self.nativeQueueMaintenanceTask?.cancel()
         self.nativeQueueMaintenanceTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            await self.fetchMoreMixSongsIfNeeded()
+            await self.fetchMoreMixSongsIfNeeded {
+                !Task.isCancelled && self.nativeQueueMaintenanceGeneration == generation
+            }
             guard !Task.isCancelled,
                   self.nativeQueueMaintenanceGeneration == generation
             else { return }

@@ -256,4 +256,56 @@ extension PlayerServiceWebQueueSyncTests {
         #expect(self.playerService.pendingNativeQueueAdvanceVideoId == nil)
         #expect(self.playerService.state == .loading)
     }
+
+    @Test("Cancelled native queue maintenance cannot append a stale mix continuation")
+    func cancelledNativeQueueMaintenanceCannotMutateQueue() async {
+        let mockClient = MockYTMusicClient()
+        let continuationGate = AsyncGate()
+        let songs = [
+            Song(id: "1", title: "Song 1", artists: [], duration: 180, videoId: "v1"),
+            Song(id: "2", title: "Song 2", artists: [], duration: 200, videoId: "v2"),
+        ]
+        let staleSong = Song(
+            id: "stale",
+            title: "Stale continuation",
+            artists: [],
+            duration: 220,
+            videoId: "stale-video"
+        )
+        mockClient.mixQueueContinuationGate = continuationGate
+        mockClient.mixQueueContinuationResult = RadioQueueResult(
+            songs: [staleSong],
+            continuationToken: nil
+        )
+        let previousWebVideoId = SingletonPlayerWebView.shared.currentVideoId
+        defer { SingletonPlayerWebView.shared.currentVideoId = previousWebVideoId }
+        self.playerService.setYTMusicClient(mockClient)
+        await self.playerService.playQueue(songs, startingAt: 0)
+        self.playerService[keyPath: \.mixContinuationToken] = "test-continuation"
+        self.playerService.beginPendingNativeQueueAdvance(to: 1)
+
+        let confirmed = await self.playerService.reconcilePendingNativeQueueAdvanceObservation(videoId: "v2")
+        #expect(confirmed)
+        await Self.waitUntilNativeQueueMaintenanceStarts(mockClient: mockClient)
+        #expect(mockClient.getMixQueueContinuationCallCount == 1)
+        let cancelledMaintenance = self.playerService.nativeQueueMaintenanceTask
+
+        await self.playerService.loadQueueSongForNavigation(at: 0)
+        await continuationGate.open()
+        await cancelledMaintenance?.value
+
+        #expect(self.playerService.queue.map(\.videoId) == ["v1", "v2"])
+        #expect(self.playerService.mixContinuationToken == "test-continuation")
+    }
+
+    private static func waitUntilNativeQueueMaintenanceStarts(mockClient: MockYTMusicClient) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now + .seconds(1)
+        while clock.now < deadline {
+            if mockClient.getMixQueueContinuationCallCount == 1 {
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+    }
 }

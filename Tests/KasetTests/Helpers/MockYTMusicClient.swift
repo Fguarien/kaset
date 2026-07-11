@@ -77,11 +77,13 @@ final class MockYTMusicClient: YTMusicClientProtocol { // swiftlint:disable:this
     var unsubscribeFromArtistDelay: Duration?
     var rateSongDelay: Duration?
     var getSongDelay: Duration?
+    var getSongErrors: [Error] = []
     var getHistoryDelay: Duration?
     var getPodcastsDelay: Duration?
     var getPlaylistDelay: Duration?
     var playlistContinuationDelay: Duration?
     var mixQueueDelay: Duration?
+    var mixQueueContinuationGate: AsyncGate?
     var getRadioQueueDelay: Duration?
     var mixQueueResult = RadioQueueResult(songs: [], continuationToken: nil)
     var mixQueueContinuationResult = RadioQueueResult(songs: [], continuationToken: nil)
@@ -1073,6 +1075,9 @@ final class MockYTMusicClient: YTMusicClientProtocol { // swiftlint:disable:this
         if let getSongDelay = self.getSongDelay {
             try? await Task.sleep(for: getSongDelay)
         }
+        if !self.getSongErrors.isEmpty {
+            throw self.getSongErrors.removeFirst()
+        }
         if let error = shouldThrowError {
             throw error
         }
@@ -1111,6 +1116,7 @@ final class MockYTMusicClient: YTMusicClientProtocol { // swiftlint:disable:this
 
     func getMixQueueContinuation(continuationToken _: String) async throws -> RadioQueueResult {
         self.getMixQueueContinuationCallCount += 1
+        await self.mixQueueContinuationGate?.wait()
         if let error = shouldThrowError {
             throw error
         }
@@ -1222,8 +1228,10 @@ final class MockYTMusicClient: YTMusicClientProtocol { // swiftlint:disable:this
         self.unsubscribeFromArtistDelay = nil
         self.rateSongDelay = nil
         self.getSongDelay = nil
+        self.getSongErrors = []
         self.getHistoryDelay = nil
         self.mixQueueDelay = nil
+        self.mixQueueContinuationGate = nil
         self.getRadioQueueDelay = nil
         self.mixQueueResult = RadioQueueResult(songs: [], continuationToken: nil)
         self.mixQueueContinuationResult = RadioQueueResult(songs: [], continuationToken: nil)

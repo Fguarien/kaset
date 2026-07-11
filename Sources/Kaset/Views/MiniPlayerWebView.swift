@@ -424,10 +424,14 @@ final class SingletonPlayerWebView { // swiftlint:disable:this type_body_length
         guard !self.hasStartedHomePreload else { return }
         guard self.currentVideoId == nil else { return }
         guard let webView else { return }
+        guard let homeURL = URL(string: "https://music.youtube.com/") else {
+            self.logger.error("Unable to construct YT Music home URL")
+            return
+        }
 
         self.hasStartedHomePreload = true
         self.logger.info("Preloading YT Music home page")
-        webView.load(URLRequest(url: URL(string: "https://music.youtube.com/")!))
+        webView.load(URLRequest(url: homeURL))
     }
 
     /// Ensures the WebView is in the given container's view hierarchy.
