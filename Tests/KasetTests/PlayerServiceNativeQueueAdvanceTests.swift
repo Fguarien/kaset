@@ -257,8 +257,8 @@ extension PlayerServiceWebQueueSyncTests {
         #expect(self.playerService.state == .loading)
     }
 
-    @Test("Cancelled native queue maintenance cannot append a stale mix continuation")
-    func cancelledNativeQueueMaintenanceCannotMutateQueue() async {
+    @Test("Cancelled native queue maintenance yields to a valid replacement fetch")
+    func cancelledNativeQueueMaintenanceYieldsToReplacementFetch() async {
         let mockClient = MockYTMusicClient()
         let continuationGate = AsyncGate()
         let songs = [
@@ -272,11 +272,18 @@ extension PlayerServiceWebQueueSyncTests {
             duration: 220,
             videoId: "stale-video"
         )
-        mockClient.mixQueueContinuationGate = continuationGate
-        mockClient.mixQueueContinuationResult = RadioQueueResult(
-            songs: [staleSong],
-            continuationToken: nil
+        let freshSong = Song(
+            id: "fresh",
+            title: "Fresh continuation",
+            artists: [],
+            duration: 220,
+            videoId: "fresh-video"
         )
+        mockClient.mixQueueContinuationGate = continuationGate
+        mockClient.mixQueueContinuationResults = [
+            RadioQueueResult(songs: [staleSong], continuationToken: "next-page"),
+            RadioQueueResult(songs: [freshSong], continuationToken: nil),
+        ]
         let previousWebVideoId = SingletonPlayerWebView.shared.currentVideoId
         defer { SingletonPlayerWebView.shared.currentVideoId = previousWebVideoId }
         self.playerService.setYTMusicClient(mockClient)
@@ -291,11 +298,19 @@ extension PlayerServiceWebQueueSyncTests {
         let cancelledMaintenance = self.playerService.nativeQueueMaintenanceTask
 
         await self.playerService.loadQueueSongForNavigation(at: 0)
+        let replacementFetch = Task { @MainActor in
+            await self.playerService.fetchMoreMixSongsIfNeeded()
+        }
+        await Self.waitUntilMixContinuationWaiterIsRegistered(playerService: self.playerService)
+        #expect(self.playerService.mixContinuationFetchWaiters.count == 1)
         await continuationGate.open()
         await cancelledMaintenance?.value
+        await replacementFetch.value
 
-        #expect(self.playerService.queue.map(\.videoId) == ["v1", "v2"])
-        #expect(self.playerService.mixContinuationToken == "test-continuation")
+        #expect(self.playerService.queue.map(\.videoId) == ["v1", "v2", "fresh-video"])
+        #expect(!self.playerService.queue.contains { $0.videoId == "stale-video" })
+        #expect(mockClient.getMixQueueContinuationCallCount == 2)
+        #expect(self.playerService.mixContinuationFetchWaiters.isEmpty)
     }
 
     private static func waitUntilNativeQueueMaintenanceStarts(mockClient: MockYTMusicClient) async {
@@ -303,6 +318,17 @@ extension PlayerServiceWebQueueSyncTests {
         let deadline = clock.now + .seconds(1)
         while clock.now < deadline {
             if mockClient.getMixQueueContinuationCallCount == 1 {
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    private static func waitUntilMixContinuationWaiterIsRegistered(playerService: PlayerService) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now + .seconds(1)
+        while clock.now < deadline {
+            if playerService.mixContinuationFetchWaiters.count == 1 {
                 return
             }
             try? await Task.sleep(for: .milliseconds(10))

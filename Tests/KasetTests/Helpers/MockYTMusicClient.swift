@@ -87,6 +87,7 @@ final class MockYTMusicClient: YTMusicClientProtocol { // swiftlint:disable:this
     var getRadioQueueDelay: Duration?
     var mixQueueResult = RadioQueueResult(songs: [], continuationToken: nil)
     var mixQueueContinuationResult = RadioQueueResult(songs: [], continuationToken: nil)
+    var mixQueueContinuationResults: [RadioQueueResult] = []
     private(set) var getMixQueueContinuationCallCount = 0
     var shouldAutoUpdatePlaylistLibraryOnMutation = true
     var shouldAutoUpdatePodcastLibraryOnMutation = true
@@ -1116,11 +1117,16 @@ final class MockYTMusicClient: YTMusicClientProtocol { // swiftlint:disable:this
 
     func getMixQueueContinuation(continuationToken _: String) async throws -> RadioQueueResult {
         self.getMixQueueContinuationCallCount += 1
+        let result = if self.mixQueueContinuationResults.isEmpty {
+            self.mixQueueContinuationResult
+        } else {
+            self.mixQueueContinuationResults.removeFirst()
+        }
         await self.mixQueueContinuationGate?.wait()
         if let error = shouldThrowError {
             throw error
         }
-        return self.mixQueueContinuationResult
+        return result
     }
 
     func getMoodCategory(browseId _: String, params _: String?) async throws -> HomeResponse {
@@ -1227,20 +1233,25 @@ final class MockYTMusicClient: YTMusicClientProtocol { // swiftlint:disable:this
         self.unsubscribeFromArtistIds = []
         self.unsubscribeFromArtistDelay = nil
         self.rateSongDelay = nil
-        self.getSongDelay = nil
-        self.getSongErrors = []
         self.getHistoryDelay = nil
-        self.mixQueueDelay = nil
-        self.mixQueueContinuationGate = nil
-        self.getRadioQueueDelay = nil
-        self.mixQueueResult = RadioQueueResult(songs: [], continuationToken: nil)
-        self.mixQueueContinuationResult = RadioQueueResult(songs: [], continuationToken: nil)
-        self.getMixQueueContinuationCallCount = 0
+        self.resetQueueFetchState()
         self.getLyricsCalled = false
         self.getLyricsVideoIds = []
         self.getRadioQueueCalled = false
         self.getRadioQueueVideoIds = []
         self.moodCategoryCalled = false
         self.shouldThrowError = nil
+    }
+
+    private func resetQueueFetchState() {
+        self.getSongDelay = nil
+        self.getSongErrors = []
+        self.mixQueueDelay = nil
+        self.mixQueueContinuationGate = nil
+        self.getRadioQueueDelay = nil
+        self.mixQueueResult = RadioQueueResult(songs: [], continuationToken: nil)
+        self.mixQueueContinuationResult = RadioQueueResult(songs: [], continuationToken: nil)
+        self.mixQueueContinuationResults = []
+        self.getMixQueueContinuationCallCount = 0
     }
 }

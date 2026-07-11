@@ -154,11 +154,28 @@ extension PlayerService {
         let songsRemaining = self.queue.count - self.currentIndex - 1
         self.logger.debug("Infinite mix check: \(songsRemaining) songs remaining, hasContinuation: \(self.mixContinuationToken != nil)")
 
+        if self.isFetchingMoreMixSongs {
+            let queueCountBeforeWait = self.queue.count
+            let continuationBeforeWait = self.mixContinuationToken
+            await withCheckedContinuation { continuation in
+                self.mixContinuationFetchWaiters.append(continuation)
+            }
+            guard !Task.isCancelled,
+                  shouldApplyResult(),
+                  self.queue.count == queueCountBeforeWait,
+                  self.mixContinuationToken == continuationBeforeWait
+            else {
+                return
+            }
+            await self.fetchMoreMixSongsIfNeeded(shouldApplyResult: shouldApplyResult)
+            return
+        }
+
         // Only fetch if we have a continuation token and we're near the end
         guard let continuation = mixContinuationToken,
-              !isFetchingMoreMixSongs,
               !(self.mixContinuationRequiresAuth && self.authService?.hasPersonalAccount != true),
-              let client = ytMusicClient
+              let client = ytMusicClient,
+              shouldApplyResult()
         else {
             return
         }
@@ -170,6 +187,7 @@ extension PlayerService {
 
         self.logger.info("Fetching more mix songs, \(songsRemaining) remaining in queue")
         self.isFetchingMoreMixSongs = true
+        defer { self.finishMixContinuationFetch() }
         let requestGeneration = self.playbackRequestGeneration
 
         do {
@@ -179,7 +197,6 @@ extension PlayerService {
                   shouldApplyResult()
             else {
                 self.logger.info("Discarding stale or cancelled mix continuation")
-                self.isFetchingMoreMixSongs = false
                 return
             }
             self.logger.debug("Continuation returned \(result.songs.count) songs, hasNextToken: \(result.continuationToken != nil)")
@@ -200,8 +217,15 @@ extension PlayerService {
         } catch {
             self.logger.warning("Failed to fetch more mix songs: \(error.localizedDescription)")
         }
+    }
 
+    private func finishMixContinuationFetch() {
         self.isFetchingMoreMixSongs = false
+        let waiters = self.mixContinuationFetchWaiters
+        self.mixContinuationFetchWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume()
+        }
     }
 
     /// Fetches radio queue and applies it, keeping the current song at the front.

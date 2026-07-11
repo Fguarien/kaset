@@ -285,6 +285,9 @@ final class PlayerService: NSObject, PlayerServiceProtocol {
     /// Whether we're currently fetching more mix songs.
     var isFetchingMoreMixSongs: Bool = false
 
+    /// Callers waiting for the current mix continuation request to release its single-flight slot.
+    @ObservationIgnored var mixContinuationFetchWaiters: [CheckedContinuation<Void, Never>] = []
+
     /// Smart Shuffle: videoIds suggested this session, for dedup across fills.
     var smartShuffleSeenSuggestionIds: Set<String> = []
 
