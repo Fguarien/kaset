@@ -71,6 +71,26 @@ extension PlayerServiceWebQueueSyncTests {
         #expect(self.playerService.pendingWebQueueInjectionVideoId == nil)
     }
 
+    @Test("Changing the expected next target invalidates stale confirmed and pending injections")
+    func changedNextTargetInvalidatesStaleInjectionState() async {
+        let songs = [
+            Song(id: "a", title: "A", artists: [], duration: 180, videoId: "va"),
+            Song(id: "b", title: "B", artists: [], duration: 180, videoId: "vb"),
+            Song(id: "c", title: "C", artists: [], duration: 180, videoId: "vc"),
+        ]
+        await self.playerService.playQueue(songs, startingAt: 0)
+        self.playerService.state = .playing
+        self.playerService.injectedWebQueueVideoId = "vb"
+        self.playerService.pendingWebQueueInjectionVideoId = "vc"
+        let generation = self.playerService.webQueueInjectionGeneration
+
+        self.playerService.syncWebQueue()
+
+        #expect(self.playerService.webQueueInjectionGeneration > generation)
+        #expect(self.playerService.injectedWebQueueVideoId == nil)
+        #expect(self.playerService.pendingWebQueueInjectionVideoId == nil)
+    }
+
     @Test("Native queue injection skips duplicate consecutive video IDs")
     func nativeQueueInjectionSkipsDuplicateVideoIDs() async {
         let duplicate = Song(
@@ -553,6 +573,8 @@ extension PlayerServiceWebQueueSyncTests {
         #expect(self.playerService.currentTrack?.videoId == "server-v2")
         #expect(self.playerService.pendingPlayVideoId == "server-v2")
         #expect(self.playerService.pendingRestoredSeek == nil)
+        #expect(self.playerService.progress == 0)
+        #expect(self.playerService.duration == 0)
         #expect(self.playerService.isPendingRestoredLoadDeferred == true)
     }
 

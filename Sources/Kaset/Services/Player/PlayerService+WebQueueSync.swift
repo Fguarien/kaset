@@ -28,6 +28,8 @@ extension PlayerService {
         if previousVideoId != observedVideoId {
             // The saved seek belongs to the persisted track, not a different server-restored track.
             self.pendingRestoredSeek = nil
+            self.progress = 0
+            self.duration = matchedQueueSong?.duration ?? 0
         }
 
         // Sync the web view's current video ID so Kaset knows the player is already on this track
@@ -135,6 +137,12 @@ extension PlayerService {
         guard nextSong.videoId != sourceVideoId else {
             self.clearWebQueueInjectionState()
             return
+        }
+
+        let confirmedTargetChanged = self.injectedWebQueueVideoId.map { $0 != nextSong.videoId } ?? false
+        let pendingTargetChanged = self.pendingWebQueueInjectionVideoId.map { $0 != nextSong.videoId } ?? false
+        if confirmedTargetChanged || pendingTargetChanged {
+            self.clearWebQueueInjectionState()
         }
 
         guard self.injectedWebQueueVideoId != nextSong.videoId,
