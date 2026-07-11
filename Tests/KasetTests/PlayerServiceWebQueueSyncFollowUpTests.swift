@@ -458,11 +458,13 @@ extension PlayerServiceWebQueueSyncTests {
         )
         self.playerService.isAwaitingWebRestoredTrack = false
 
-        self.playerService.updatePlaybackState(isPlaying: true, progress: 61, duration: 180)
+        self.playerService.updatePlaybackState(isPlaying: true, progress: 61, duration: 0)
 
         #expect(self.playerService.isPendingRestoredLoadDeferred == true)
         #expect(self.playerService.state == .paused)
         #expect(self.playerService.pendingRestoredSeek == 60)
+        #expect(self.playerService.progress == 60)
+        #expect(self.playerService.duration == 180)
         #expect(self.playerService.currentTrack?.videoId == "v1")
         #expect(self.playerService.hasIssuedAutoplayPauseDuringDeferredRestore == true)
     }

@@ -21,6 +21,7 @@ struct PlaybackObserverIdentityTests {
         #expect(script.contains("confirmMediaIdentityOnPlaying"))
         #expect(script.contains("identityCorrectionEvidence"))
         #expect(script.contains("initialEmptyIdentityResolved"))
+        #expect(script.contains("mediaIdentityIsInitialBinding = !previousMediaVideoId && !videoId"))
         #expect(script.contains("observerEpoch: observerEpoch"))
     }
 

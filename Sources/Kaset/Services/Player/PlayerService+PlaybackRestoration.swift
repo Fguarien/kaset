@@ -44,8 +44,12 @@ extension PlayerService {
         let previousProgress = self.progress
 
         if self.isPendingRestoredLoadDeferred {
-            self.progress = progress
-            self.duration = duration
+            if self.pendingRestoredSeek == nil {
+                self.progress = progress
+            }
+            if duration > 0 {
+                self.duration = duration
+            }
             self.state = .paused
             if isPlaying, !self.hasIssuedAutoplayPauseDuringDeferredRestore {
                 self.hasIssuedAutoplayPauseDuringDeferredRestore = true

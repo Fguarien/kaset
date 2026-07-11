@@ -282,7 +282,7 @@ extension SingletonPlayerWebView {
                 mediaVideoId = videoId;
                 mediaSource = source;
                 lastMediaCurrentTime = currentTime;
-                mediaIdentityIsInitialBinding = !previousMediaVideoId;
+                mediaIdentityIsInitialBinding = !previousMediaVideoId && !videoId;
                 mediaIdentityTransitionFromVideoId = previousMediaVideoId || videoId;
                 mediaIdentityUncertain = !videoId
                     || mediaIdentityIsInitialBinding
