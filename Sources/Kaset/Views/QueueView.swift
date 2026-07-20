@@ -149,6 +149,7 @@ private struct QueueRowView: View {
     let onRemove: () -> Void
     let onTap: () -> Void
 
+    @Environment(JukeboxDownloadService.self) private var jukeboxDownloadService
     @State private var isHovering = false
 
     var body: some View {
@@ -210,6 +211,8 @@ private struct QueueRowView: View {
             Divider()
 
             ShareContextMenu.menuItem(for: self.song)
+
+            DownloadContextMenu.menuItem(for: self.song, service: self.jukeboxDownloadService)
 
             if !self.isCurrentTrack {
                 Button(role: .destructive) {

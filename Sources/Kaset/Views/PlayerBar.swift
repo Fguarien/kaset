@@ -14,6 +14,7 @@ struct PlayerBar: View { // swiftlint:disable:this type_body_length
     @Environment(PlayerService.self) private var playerService
     @Environment(FavoritesManager.self) private var favoritesManager
     @Environment(SongLikeStatusManager.self) private var likeStatusManager
+    @Environment(JukeboxDownloadService.self) private var jukeboxDownloadService
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.playerBarNavigationAction) private var navigationAction
@@ -849,6 +850,8 @@ struct PlayerBar: View { // swiftlint:disable:this type_body_length
         Divider()
 
         ShareContextMenu.menuItem(for: track)
+
+        DownloadContextMenu.menuItem(for: track, service: self.jukeboxDownloadService)
 
         Divider()
 

@@ -207,6 +207,11 @@ struct MainWindow: View { // swiftlint:disable:this type_body_length
             AccountErrorToast()
                 .padding(.top, 60)
         }
+        .overlay(alignment: .top) {
+            // Download start/success/failure feedback (jukebox backend)
+            JukeboxDownloadToast()
+                .padding(.top, 60)
+        }
         .frame(minWidth: MainWindowLayout.minimumWidth, minHeight: MainWindowLayout.minimumHeight)
         .onChange(of: self.showCommandBar.wrappedValue) { _, newValue in
             if newValue {
