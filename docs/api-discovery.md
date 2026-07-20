@@ -208,7 +208,7 @@ Browse endpoints use `POST /browse` with a `browseId` parameter.
 | `FEmusic_new_releases` | New Releases | 🌐 | Recent albums, singles, videos | `HomeResponseParser` |
 | `FEmusic_library_landing` | Library Landing | 🔐 | Library content previews (playlists, albums, podcasts, artists) | `PlaylistParser.parseLibraryContent` |
 | `FEmusic_liked_playlists` | Library Playlists | 🔐 | User's saved/created playlists | `PlaylistParser` |
-| `FEmusic_liked_albums` | Library Albums | 🔐 | User's saved albums | `PlaylistParser.parseLibraryAlbums` |
+| `FEmusic_liked_albums` | Library Albums | 🔐 | User's saved albums | `PlaylistParser.parseLibraryAlbumsPage` / `parseLibraryAlbumsContinuation` |
 | `FEmusic_library_privately_owned_tracks` | Uploaded Songs | 🔐 | User-uploaded songs with playlist-style rows and continuation | `PlaylistParser` |
 | `VLLM` | Liked Songs | 🔐 | All songs user has liked (with pagination) | `PlaylistParser` |
 | `VL{playlistId}` | Playlist Detail | 🌐 | Playlist tracks and metadata | `PlaylistParser` |
@@ -280,7 +280,7 @@ let body = ["browseId": "FEmusic_liked_albums"]
 
 **Returns**: A paginated grid of saved albums with album browse IDs, artwork, artist metadata, and release year. Kaset follows grid continuation tokens until the saved-album collection is exhausted.
 
-**Parser**: Uses `PlaylistParser.parseLibraryAlbums()` and merges any landing-page preview albums as a fallback.
+**Parser**: Uses `PlaylistParser.parseLibraryAlbumsPage()` for the initial response and `PlaylistParser.parseLibraryAlbumsContinuation()` for subsequent grid pages, then merges any landing-page preview albums as a fallback.
 
 **Library mutations**: Album detail navigation uses an `MPRE...` browse ID, but `like/like` and `like/removelike` must target the album's `OLAK...` playlist ID. Album browse responses expose that playlist ID through play/queue endpoints even when the personalized Save button is unavailable.
 

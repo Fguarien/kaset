@@ -871,7 +871,8 @@ struct PlaylistDetailViewModelTests {
         let detail = PlaylistDetail(
             playlist: album,
             tracks: TestFixtures.makeSongs(count: 100),
-            duration: nil
+            duration: nil,
+            libraryTargetId: "OLAK-test-album"
         )
         self.mockClient.playlistDetails[album.id] = detail
         self.mockClient.playlistContinuationTracks[album.id] = [
@@ -884,7 +885,13 @@ struct PlaylistDetailViewModelTests {
 
         #expect(self.mockClient.getPlaylistContinuationCalled == false)
         #expect(albumViewModel.playlistDetail?.tracks.count == 100)
+        #expect(albumViewModel.playlistDetail?.libraryTargetId == "OLAK-test-album")
         #expect(albumViewModel.hasMore == true)
+
+        await albumViewModel.loadMore()
+
+        #expect(albumViewModel.playlistDetail?.tracks.count == 125)
+        #expect(albumViewModel.playlistDetail?.libraryTargetId == "OLAK-test-album")
     }
 
     // MARK: - Load More Tests

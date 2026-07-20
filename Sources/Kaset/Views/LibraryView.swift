@@ -307,7 +307,7 @@ struct LibraryView: View {
     private var emptyStateMessage: String {
         switch self.selectedFilter {
         case .all:
-            String(localized: "Save albums and playlists, follow artists, and subscribe to podcasts on YouTube Music to see them here.")
+            String(localized: "Save playlists, follow artists, and subscribe to podcasts on YouTube Music to see them here.")
         case .playlists:
             String(localized: "Create or save playlists on YouTube Music to see them here.")
         case .albums:
