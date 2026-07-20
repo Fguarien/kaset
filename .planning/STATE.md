@@ -56,7 +56,7 @@ Recent decisions affecting current work:
 - **Phase 1** — jukebox `POST /download` deployed on vm-docker; live-tested (ok/skip/400, mp3+cover in `ExtraMusic/kaset/`). Committed + dual-pushed to homelab-vault.
 - **Phase 2** — `JukeboxDownloadService`, `SettingsManager.jukeboxBaseURL`, `Info.plist` ATS exception, service registered in `KasetApp`, Downloads section in Music settings.
 - **Phase 3** — `DownloadContextMenu` action (PlayerBar + queue rows), `JukeboxDownloadToast` mounted in MainWindow.
-- Swift 6 `swift build` clean (0 errors, 378 modules); `Kaset.app` bundled via `Scripts/build-app.sh`.
+- Swift 6 `swift build` clean (0 errors, 378 modules). `Kaset.app` (31M) assembled via `Scripts/build-app.sh` + **ad-hoc signed** and runnable on the Mac (`~/kaset/.build/app/Kaset.app`). Note: the script's `dev` codesign step fails over headless SSH (`errSecInternalComponent`) — ad-hoc sign used instead; see `faqs/kaset.md`.
 
 ### Pending Todos
 
