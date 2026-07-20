@@ -60,12 +60,12 @@ Kaset is a native macOS (SwiftUI, macOS 15.4+) YouTube Music + YouTube client �
 
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
-| Download runs server-side (jukebox), app sends only `videoId` | Sidesteps in-app Widevine DRM; reuses proven yt-dlp+tag pipeline; keeps Swift thin | — Pending |
-| Extend jukebox with an on-demand `/download` endpoint (vs file-drop) | Button UX needs synchronous single-track; `downloader.download()` already supports it | — Pending |
-| Hook = player-bar current-song context menu (beside Share) | Existing, discoverable pattern; `currentTrack` in scope; mirrors on queue rows | — Pending |
-| New `JukeboxDownloadService` modeled on `LastFMService` | No generic HTTP client exists; LastFM is a copy-ready URLSession-POST template | — Pending |
-| Backend base URL configurable via `SettingsManager` | Avoid hardcoding the homelab IP; survive network changes | — Pending |
-| Audio-only mp3, single current song for v1 | Matches "download music"; smallest useful slice | — Pending |
+| Download runs server-side (jukebox), app sends only `videoId` | Sidesteps in-app Widevine DRM; reuses proven yt-dlp+tag pipeline; keeps Swift thin | ✅ Done |
+| Extend jukebox with an on-demand `/download` endpoint (vs file-drop) | Button UX needs synchronous single-track; `downloader.download()` already supports it | ✅ Done |
+| Hook = player-bar current-song context menu (beside Share) | Existing, discoverable pattern; `currentTrack` in scope; mirrors on queue rows | ✅ Done |
+| New `JukeboxDownloadService` modeled on `LastFMService` | No generic HTTP client exists; LastFM is a copy-ready URLSession-POST template | ✅ Done |
+| Backend base URL configurable via `SettingsManager` | Avoid hardcoding the homelab IP; survive network changes | ✅ Done |
+| Audio-only mp3, single current song for v1 | Matches "download music"; smallest useful slice | ✅ Done |
 
 ## Evolution
 

@@ -48,19 +48,19 @@ Milestone: add "download the currently-playing song as a tagged mp3" to the kase
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| BE-01 | Phase 1 | Pending |
-| BE-02 | Phase 1 | Pending |
-| BE-03 | Phase 1 | Pending |
-| BE-04 | Phase 1 | Pending |
-| SVC-01 | Phase 2 | Pending |
-| SVC-02 | Phase 2 | Pending |
-| SVC-03 | Phase 2 | Pending |
-| SVC-04 | Phase 2 | Pending |
-| CFG-01 | Phase 2 | Pending |
-| CFG-02 | Phase 2 | Pending |
-| UI-01 | Phase 3 | Pending |
-| UI-02 | Phase 3 | Pending |
-| UI-03 | Phase 3 | Pending |
-| UI-04 | Phase 3 | Pending |
+| BE-01 | Phase 1 | ✅ Done |
+| BE-02 | Phase 1 | ✅ Done |
+| BE-03 | Phase 1 | ✅ Done |
+| BE-04 | Phase 1 | ✅ Done |
+| SVC-01 | Phase 2 | ✅ Done |
+| SVC-02 | Phase 2 | ✅ Done |
+| SVC-03 | Phase 2 | ✅ Done |
+| SVC-04 | Phase 2 | ✅ Done |
+| CFG-01 | Phase 2 | ✅ Done |
+| CFG-02 | Phase 2 | ✅ Done |
+| UI-01 | Phase 3 | ✅ Done |
+| UI-02 | Phase 3 | ✅ Done |
+| UI-03 | Phase 3 | ✅ Done |
+| UI-04 | Phase 3 | ✅ Done |
 
 **Coverage:** 14/14 v1 requirements mapped, no orphans, no duplicates.

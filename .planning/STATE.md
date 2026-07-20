@@ -5,16 +5,16 @@
 See: .planning/PROJECT.md (updated 2026-07-20)
 
 **Core value:** One click on the playing song → a tagged mp3 lands in the NAS music library. The app never blocks and always tells the user whether it worked.
-**Current focus:** Phase 1 — Backend On-Demand Download Endpoint
+**Current focus:** All 3 phases delivered — pending manual GUI click-test by user.
 
 ## Current Position
 
-Phase: 1 of 3 (Backend On-Demand Download Endpoint)
-Plan: 0 of TBD in current phase
-Status: Ready to plan
-Last activity: 2026-07-20 — Roadmap created (3 phases, coarse, MVP-first)
+Phase: 3 of 3 complete (Download UI Action + Feedback)
+Plan: —
+Status: Delivered — code shipped, backend live-tested, Swift build clean.
+Last activity: 2026-07-20 — Phases 1-3 implemented, deployed, built (0 errors).
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [██████████] 100% (implementation)
 
 ## Performance Metrics
 
@@ -51,13 +51,20 @@ Recent decisions affecting current work:
 - **Phase 1 edits the jukebox repo** at `/home/parallels/homelab-vault/10-stacks/jukebox/` (FastAPI on vm-docker `10.234.1.43:8772`), NOT the kaset repo.
 - **Phases 2-3 edit this repo** (`/home/parallels/kaset`); Swift builds run on the Mac (Xcode) over SSH.
 
+### What shipped
+
+- **Phase 1** — jukebox `POST /download` deployed on vm-docker; live-tested (ok/skip/400, mp3+cover in `ExtraMusic/kaset/`). Committed + dual-pushed to homelab-vault.
+- **Phase 2** — `JukeboxDownloadService`, `SettingsManager.jukeboxBaseURL`, `Info.plist` ATS exception, service registered in `KasetApp`, Downloads section in Music settings.
+- **Phase 3** — `DownloadContextMenu` action (PlayerBar + queue rows), `JukeboxDownloadToast` mounted in MainWindow.
+- Swift 6 `swift build` clean (0 errors, 378 modules); `Kaset.app` bundled via `Scripts/build-app.sh`.
+
 ### Pending Todos
 
-None yet.
+- **Manual GUI click-test** (needs signed-in YT Music account, interactive): play a song → right-click → Download → confirm toast + mp3 in NAS. Backend already proven via curl; this validates the in-app wiring end-to-end.
 
 ### Blockers/Concerns
 
-None yet.
+- swiftformat/swiftlint not installed on the Mac → house-style lint not run (build clean, code mirrors existing patterns).
 
 ## Deferred Items
 
