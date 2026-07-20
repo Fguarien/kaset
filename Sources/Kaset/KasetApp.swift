@@ -57,6 +57,7 @@ struct KasetApp: App {
     @State private var equalizerService = EqualizerService.shared
     @State private var settings = SettingsManager.shared
     @State private var podcastsAvailabilityService = PodcastsAvailabilityService()
+    @State private var jukeboxDownloadService = JukeboxDownloadService()
 
     /// Triggers search field focus when set to true.
     @State private var searchFocusTrigger = false
@@ -207,6 +208,7 @@ struct KasetApp: App {
                 .environment(self.syncedLyricsService)
                 .environment(self.equalizerService)
                 .environment(self.podcastsAvailabilityService)
+                .environment(self.jukeboxDownloadService)
                 .environment(\.searchFocusTrigger, self.$searchFocusTrigger)
                 .environment(\.sidebarNavigationReselectGenerations, self.$sidebarNavigationReselectGenerations)
                 .environment(\.navigationSelection, self.$navigationSelection)

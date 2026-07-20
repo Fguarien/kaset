@@ -17,6 +17,14 @@
 		</dict>
 	</array>
 
+	<!-- App Transport Security: allow plain-HTTP requests to the homelab
+	     "jukebox" download backend on the local network (LAN-only, no TLS). -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
+
 	<!-- Sparkle Auto-Update Configuration -->
 	<key>SUFeedURL</key>
 	<string>https://raw.githubusercontent.com/sozercan/kaset/main/appcast.xml</string>

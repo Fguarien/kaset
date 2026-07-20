@@ -75,6 +75,24 @@ struct MusicSettingsView: View {
                 Text(String(localized: "Audio"))
             }
 
+            // MARK: - Downloads Section
+
+            Section {
+                TextField(
+                    String(localized: "Jukebox Backend URL"),
+                    text: self.$settings.jukeboxBaseURL,
+                    prompt: Text(verbatim: SettingsManager.defaultJukeboxBaseURL)
+                )
+                .textFieldStyle(.roundedBorder)
+                .help(String(localized: "The homelab download service that fetches the current song as an mp3. LAN address, e.g. http://10.234.1.43:8772"))
+            } header: {
+                Text(String(localized: "Downloads"))
+            } footer: {
+                Text(String(localized: "The \u{201C}Download\u{201D} action sends the playing song to this backend, which saves a tagged mp3 to the music library."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             // MARK: - Lyrics Section
 
             Section {

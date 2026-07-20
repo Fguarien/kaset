@@ -33,6 +33,7 @@ final class SettingsManager {
         static let ambientBackdropEnabled = "settings.ambientBackdropEnabled"
         static let ambientBackdropStyle = "settings.ambientBackdropStyle"
         static let popOutVideoOnNavigateAway = "settings.popOutVideoOnNavigateAway"
+        static let jukeboxBaseURL = "settings.jukeboxBaseURL"
         #if DEBUG
             static let useLegacyMacOS15UI = "settings.debug.useLegacyMacOS15UI"
         #endif
@@ -328,6 +329,19 @@ final class SettingsManager {
         }
     }
 
+    // MARK: - Jukebox Download
+
+    /// Default base URL for the homelab "jukebox" download backend (yt-dlp on vm-docker).
+    nonisolated static let defaultJukeboxBaseURL = "http://10.234.1.43:8772"
+
+    /// Base URL of the jukebox backend that performs server-side mp3 downloads.
+    /// The "Download" action POSTs the current song's videoId here. LAN-only, no auth (v1).
+    var jukeboxBaseURL: String {
+        didSet {
+            UserDefaults.standard.set(self.jukeboxBaseURL, forKey: Keys.jukeboxBaseURL)
+        }
+    }
+
     // MARK: - Smart Shuffle defaults & ranges (single source of truth)
 
     /// Default cadence: insert a burst of suggestions every N originals.
@@ -474,6 +488,7 @@ final class SettingsManager {
         self.syncedLyricsEnabled = UserDefaults.standard.object(forKey: Keys.syncedLyricsEnabled) as? Bool ?? true
         self.romanizationEnabled = UserDefaults.standard.object(forKey: Keys.romanizationEnabled) as? Bool ?? true
         self.keepMiniPlayerOnTop = UserDefaults.standard.object(forKey: Keys.keepMiniPlayerOnTop) as? Bool ?? false
+        self.jukeboxBaseURL = UserDefaults.standard.string(forKey: Keys.jukeboxBaseURL) ?? Self.defaultJukeboxBaseURL
         self.smartShuffleEnabled = UserDefaults.standard.object(forKey: Keys.smartShuffleEnabled) as? Bool ?? true
         // Property observers do not fire for assignments in init, so clamp persisted values here too.
         self.smartShuffleSuggestEveryN = Self.clamp(
