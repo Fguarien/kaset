@@ -5,6 +5,12 @@ import os
 enum LibraryContentParser {
     private static let logger = DiagnosticsLogger.api
 
+    /// One page of saved albums and the token for the next page, when present.
+    struct LibraryAlbumsPage {
+        let albums: [Album]
+        let nextPage: String?
+    }
+
     /// Source used for followed-artist content in a combined Library response.
     enum LibraryArtistsSource {
         case dedicated
@@ -14,6 +20,7 @@ enum LibraryContentParser {
     /// Parsed Library content from YouTube Music browse responses.
     struct LibraryContent {
         let playlists: [Playlist]
+        let albums: [Album]
         let artists: [Artist]
         let podcastShows: [PodcastShow]
         let uploadedSongsPlaylist: Playlist?
@@ -21,12 +28,14 @@ enum LibraryContentParser {
 
         init(
             playlists: [Playlist],
+            albums: [Album] = [],
             artists: [Artist],
             podcastShows: [PodcastShow],
             uploadedSongsPlaylist: Playlist? = nil,
             artistsSource: LibraryArtistsSource = .dedicated
         ) {
             self.playlists = playlists
+            self.albums = albums
             self.artists = artists
             self.podcastShows = podcastShows
             self.uploadedSongsPlaylist = uploadedSongsPlaylist
@@ -40,6 +49,7 @@ enum LibraryContentParser {
         let browseEndpoint: [String: Any]
         let title: String
         let subtitle: String?
+        let subtitleRuns: [[String: Any]]
         let thumbnailURL: URL?
         let allowsRadioPlaylist: Bool
         let renderer: [String: Any]
@@ -49,9 +59,46 @@ enum LibraryContentParser {
         self.parseLibraryContent(data).playlists
     }
 
-    /// Parses library content from browse response, returning playlists, artists, and podcast shows.
+    /// Parses albums from the dedicated saved-albums browse response.
+    static func parseLibraryAlbums(_ data: [String: Any]) -> [Album] {
+        self.parseLibraryAlbumsPage(data).albums
+    }
+
+    /// Parses the first saved-albums page and its continuation token.
+    static func parseLibraryAlbumsPage(_ data: [String: Any]) -> LibraryAlbumsPage {
+        let albums = self.parseLibraryContent(data).albums
+        let gridRenderer = ResponseTreeSearch.firstDictionary(named: "gridRenderer", in: data)
+        return LibraryAlbumsPage(
+            albums: albums,
+            nextPage: gridRenderer.flatMap { Self.nextPage(from: $0, itemsKey: "items") }
+        )
+    }
+
+    /// Parses a saved-albums continuation response in legacy or append-action format.
+    static func parseLibraryAlbumsContinuation(_ data: [String: Any]) -> LibraryAlbumsPage {
+        if let gridContinuation = ResponseTreeSearch.firstDictionary(named: "gridContinuation", in: data) {
+            let items = gridContinuation["items"] as? [[String: Any]] ?? []
+            return LibraryAlbumsPage(
+                albums: Self.parseAlbumItems(items),
+                nextPage: Self.nextPage(from: gridContinuation, itemsKey: "items")
+            )
+        }
+
+        if let appendAction = ResponseTreeSearch.firstDictionary(named: "appendContinuationItemsAction", in: data) {
+            let items = appendAction["continuationItems"] as? [[String: Any]] ?? []
+            return LibraryAlbumsPage(
+                albums: Self.parseAlbumItems(items),
+                nextPage: Self.nextPage(from: appendAction, itemsKey: "continuationItems")
+            )
+        }
+
+        return LibraryAlbumsPage(albums: [], nextPage: nil)
+    }
+
+    /// Parses library content from browse response, returning playlists, albums, artists, and podcast shows.
     static func parseLibraryContent(_ data: [String: Any]) -> LibraryContent {
         var playlists: [Playlist] = []
+        var albums: [Album] = []
         var artists: [Artist] = []
         var podcastShows: [PodcastShow] = []
 
@@ -59,12 +106,18 @@ enum LibraryContentParser {
             Self.appendLibraryItems(
                 from: sectionData,
                 playlists: &playlists,
+                albums: &albums,
                 artists: &artists,
                 podcastShows: &podcastShows
             )
         }
 
-        return LibraryContent(playlists: playlists, artists: artists, podcastShows: podcastShows)
+        return LibraryContent(
+            playlists: playlists,
+            albums: albums,
+            artists: artists,
+            podcastShows: podcastShows
+        )
     }
 
     /// Merges library playlists using the dedicated endpoint as authoritative while retaining landing-only items.
@@ -81,16 +134,31 @@ enum LibraryContentParser {
         return mergedPlaylists
     }
 
+    /// Merges dedicated saved albums with any landing-page preview albums.
+    static func mergedLibraryAlbums(dedicated dedicatedAlbums: [Album], fallback fallbackAlbums: [Album]) -> [Album] {
+        var mergedAlbums = dedicatedAlbums
+        var seenAlbumIDs = Set(dedicatedAlbums.map(\.id))
+
+        for album in fallbackAlbums {
+            guard seenAlbumIDs.insert(album.id).inserted else { continue }
+            mergedAlbums.append(album)
+        }
+
+        return mergedAlbums
+    }
+
     /// Parses artists from the dedicated library artists browse response.
     static func parseLibraryArtists(_ data: [String: Any]) -> [Artist] {
         var artists: [Artist] = []
         var ignoredPlaylists: [Playlist] = []
+        var ignoredAlbums: [Album] = []
         var ignoredPodcastShows: [PodcastShow] = []
 
         for sectionData in Self.extractLibrarySections(from: data) {
             Self.appendLibraryItems(
                 from: sectionData,
                 playlists: &ignoredPlaylists,
+                albums: &ignoredAlbums,
                 artists: &artists,
                 podcastShows: &ignoredPodcastShows
             )
@@ -137,6 +205,7 @@ enum LibraryContentParser {
     private static func appendLibraryItems(
         from sectionData: [String: Any],
         playlists: inout [Playlist],
+        albums: inout [Album],
         artists: inout [Artist],
         podcastShows: inout [PodcastShow]
     ) {
@@ -149,6 +218,7 @@ enum LibraryContentParser {
                 Self.appendLibraryItem(
                     Self.twoRowCandidate(from: twoRowRenderer),
                     playlists: &playlists,
+                    albums: &albums,
                     artists: &artists,
                     podcastShows: &podcastShows
                 )
@@ -167,6 +237,7 @@ enum LibraryContentParser {
                 Self.appendResponsiveLibraryItems(
                     shelfContents,
                     playlists: &playlists,
+                    albums: &albums,
                     artists: &artists,
                     podcastShows: &podcastShows
                 )
@@ -180,6 +251,7 @@ enum LibraryContentParser {
             Self.appendResponsiveLibraryItems(
                 shelfContents,
                 playlists: &playlists,
+                albums: &albums,
                 artists: &artists,
                 podcastShows: &podcastShows
             )
@@ -189,6 +261,7 @@ enum LibraryContentParser {
     private static func appendResponsiveLibraryItems(
         _ shelfContents: [[String: Any]],
         playlists: inout [Playlist],
+        albums: inout [Album],
         artists: inout [Artist],
         podcastShows: inout [PodcastShow]
     ) {
@@ -197,9 +270,25 @@ enum LibraryContentParser {
             Self.appendLibraryItem(
                 Self.responsiveCandidate(from: responsiveRenderer),
                 playlists: &playlists,
+                albums: &albums,
                 artists: &artists,
                 podcastShows: &podcastShows
             )
+        }
+    }
+
+    private static func parseAlbumItems(_ items: [[String: Any]]) -> [Album] {
+        items.compactMap { item -> Album? in
+            let candidate: LibraryItemCandidate? = if let twoRowRenderer = item["musicTwoRowItemRenderer"] as? [String: Any] {
+                Self.twoRowCandidate(from: twoRowRenderer)
+            } else if let responsiveRenderer = item["musicResponsiveListItemRenderer"] as? [String: Any] {
+                Self.responsiveCandidate(from: responsiveRenderer)
+            } else {
+                nil
+            }
+
+            guard let candidate, Self.isAlbum(candidate) else { return nil }
+            return Self.album(from: candidate)
         }
     }
 
@@ -218,6 +307,7 @@ enum LibraryContentParser {
             browseEndpoint: browseEndpoint,
             title: ParsingHelpers.extractTitle(from: data) ?? "Unknown",
             subtitle: ParsingHelpers.extractSubtitle(from: data),
+            subtitleRuns: Self.twoRowSubtitleRuns(from: data),
             thumbnailURL: ParsingHelpers.extractThumbnailURL(from: data),
             allowsRadioPlaylist: true,
             renderer: data
@@ -239,6 +329,7 @@ enum LibraryContentParser {
             browseEndpoint: browseEndpoint,
             title: ParsingHelpers.extractTitleFromFlexColumns(data) ?? "Unknown",
             subtitle: ParsingHelpers.extractSubtitleFromFlexColumns(data),
+            subtitleRuns: Self.responsiveSubtitleRuns(from: data),
             thumbnailURL: ParsingHelpers.extractThumbnailURL(from: data),
             allowsRadioPlaylist: false,
             renderer: data
@@ -248,6 +339,7 @@ enum LibraryContentParser {
     private static func appendLibraryItem(
         _ candidate: LibraryItemCandidate?,
         playlists: inout [Playlist],
+        albums: inout [Album],
         artists: inout [Artist],
         podcastShows: inout [PodcastShow]
     ) {
@@ -258,6 +350,9 @@ enum LibraryContentParser {
         if candidate.browseId.hasPrefix("MPSPP") {
             podcastShows.append(Self.podcastShow(from: candidate))
             Self.logger.info("\(candidate.sourceName): Added podcast show: \(candidate.title)")
+        } else if Self.isAlbum(candidate) {
+            albums.append(Self.album(from: candidate))
+            Self.logger.info("\(candidate.sourceName): Added album: \(candidate.title)")
         } else if Self.isPlaylistBrowseID(candidate.browseId, allowsRadioPlaylist: candidate.allowsRadioPlaylist) {
             playlists.append(Self.playlist(from: candidate))
             Self.logger.info("\(candidate.sourceName): Added playlist: \(candidate.title)")
@@ -292,6 +387,49 @@ enum LibraryContentParser {
         )
     }
 
+    private static func album(from candidate: LibraryItemCandidate) -> Album {
+        var seenArtistIDs = Set<String>()
+        let linkedArtists = candidate.subtitleRuns.compactMap { run -> Artist? in
+            guard let name = Self.normalizedRunText(run),
+                  let navigationEndpoint = run["navigationEndpoint"] as? [String: Any],
+                  let browseEndpoint = navigationEndpoint["browseEndpoint"] as? [String: Any],
+                  let artistID = browseEndpoint["browseId"] as? String,
+                  Artist.isNavigableId(artistID),
+                  seenArtistIDs.insert(artistID).inserted
+            else {
+                return nil
+            }
+
+            return Artist(
+                id: artistID,
+                name: name,
+                profileKind: Artist.profileKind(forPageType: ParsingHelpers.extractPageType(from: browseEndpoint))
+            )
+        }
+
+        let year = candidate.subtitleRuns
+            .compactMap(Self.normalizedRunText)
+            .first(where: Self.isAlbumYear)
+
+        let artists: [Artist]? = if linkedArtists.isEmpty {
+            Self.fallbackAlbumArtist(from: candidate.subtitleRuns, year: year).map {
+                [Artist.inline(name: $0, namespace: "library-album-artist")]
+            }
+        } else {
+            linkedArtists
+        }
+
+        return Album(
+            id: candidate.browseId,
+            title: candidate.title,
+            artists: artists,
+            thumbnailURL: candidate.thumbnailURL,
+            year: year,
+            trackCount: nil,
+            libraryTargetId: ParsingHelpers.extractAlbumLibraryTargetId(from: candidate.renderer)
+        )
+    }
+
     private static func artist(from candidate: LibraryItemCandidate) -> Artist {
         let pageType = ParsingHelpers.extractPageType(from: candidate.browseEndpoint)
         return Artist(
@@ -301,6 +439,90 @@ enum LibraryContentParser {
             profileKind: Artist.profileKind(forPageType: pageType)
         )
     }
+
+    private static func isAlbum(_ candidate: LibraryItemCandidate) -> Bool {
+        let pageType = ParsingHelpers.extractPageType(from: candidate.browseEndpoint)
+        return pageType == "MUSIC_PAGE_TYPE_ALBUM"
+            || candidate.browseId.hasPrefix("MPRE")
+            || candidate.browseId.hasPrefix("OLAK")
+    }
+
+    private static func twoRowSubtitleRuns(from data: [String: Any]) -> [[String: Any]] {
+        guard let subtitle = data["subtitle"] as? [String: Any],
+              let runs = subtitle["runs"] as? [[String: Any]]
+        else {
+            return []
+        }
+
+        return runs
+    }
+
+    private static func responsiveSubtitleRuns(from data: [String: Any]) -> [[String: Any]] {
+        guard let flexColumns = data["flexColumns"] as? [[String: Any]],
+              flexColumns.count > 1,
+              let renderer = flexColumns[1]["musicResponsiveListItemFlexColumnRenderer"] as? [String: Any],
+              let text = renderer["text"] as? [String: Any],
+              let runs = text["runs"] as? [[String: Any]]
+        else {
+            return []
+        }
+
+        return runs
+    }
+
+    private static func normalizedRunText(_ run: [String: Any]) -> String? {
+        guard let text = (run["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty,
+              text != "•",
+              text != "&",
+              text != ","
+        else {
+            return nil
+        }
+
+        return text
+    }
+
+    private static func fallbackAlbumArtist(from runs: [[String: Any]], year: String?) -> String? {
+        let metadata = runs.compactMap(Self.normalizedRunText).filter { text in
+            text != year && !Self.albumTypeLabels.contains(text.lowercased())
+        }
+        return metadata.last
+    }
+
+    private static func isAlbumYear(_ text: String) -> Bool {
+        guard text.count == 4,
+              text.allSatisfy(\.isNumber),
+              let year = Int(text)
+        else {
+            return false
+        }
+
+        return (1900 ... 2100).contains(year)
+    }
+
+    private static func nextPage(from renderer: [String: Any], itemsKey: String) -> String? {
+        if let continuations = renderer["continuations"] as? [[String: Any]],
+           let firstContinuation = continuations.first,
+           let nextContinuationData = firstContinuation["nextContinuationData"] as? [String: Any],
+           let cursor = nextContinuationData["continuation"] as? String
+        {
+            return cursor
+        }
+
+        guard let items = renderer[itemsKey] as? [[String: Any]],
+              let lastItem = items.last,
+              let continuationItemRenderer = lastItem["continuationItemRenderer"] as? [String: Any],
+              let continuationEndpoint = continuationItemRenderer["continuationEndpoint"] as? [String: Any],
+              let continuationCommand = continuationEndpoint["continuationCommand"] as? [String: Any]
+        else {
+            return nil
+        }
+
+        return continuationCommand["token"] as? String
+    }
+
+    private static let albumTypeLabels = Set(["album", "single", "ep"])
 
     private static func isPlaylistBrowseID(_ browseID: String, allowsRadioPlaylist: Bool) -> Bool {
         browseID.hasPrefix("VL") || browseID.hasPrefix("PL") || (allowsRadioPlaylist && browseID.hasPrefix("RDCLAK"))

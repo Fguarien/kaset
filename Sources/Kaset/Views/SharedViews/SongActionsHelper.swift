@@ -95,8 +95,8 @@ enum SongActionsHelper {
         _ playlist: Playlist,
         client: any YTMusicClientProtocol,
         libraryViewModel: LibraryViewModel?
-    ) async {
-        await LibraryMutationActions.addPlaylistToLibrary(
+    ) async throws {
+        try await LibraryMutationActions.addPlaylistToLibrary(
             playlist,
             client: client,
             libraryViewModel: libraryViewModel
@@ -108,9 +108,39 @@ enum SongActionsHelper {
         _ playlist: Playlist,
         client: any YTMusicClientProtocol,
         libraryViewModel: LibraryViewModel?
-    ) async {
-        await LibraryMutationActions.removePlaylistFromLibrary(
+    ) async throws {
+        try await LibraryMutationActions.removePlaylistFromLibrary(
             playlist,
+            client: client,
+            libraryViewModel: libraryViewModel
+        )
+    }
+
+    /// Adds an album to the library using its album playlist target.
+    static func addAlbumToLibrary(
+        _ album: Album,
+        targetPlaylistId: String,
+        client: any YTMusicClientProtocol,
+        libraryViewModel: LibraryViewModel?
+    ) async throws {
+        try await LibraryMutationActions.addAlbumToLibrary(
+            album,
+            targetPlaylistId: targetPlaylistId,
+            client: client,
+            libraryViewModel: libraryViewModel
+        )
+    }
+
+    /// Removes an album from the library using its album playlist target.
+    static func removeAlbumFromLibrary(
+        _ album: Album,
+        targetPlaylistId: String,
+        client: any YTMusicClientProtocol,
+        libraryViewModel: LibraryViewModel?
+    ) async throws {
+        try await LibraryMutationActions.removeAlbumFromLibrary(
+            album,
+            targetPlaylistId: targetPlaylistId,
             client: client,
             libraryViewModel: libraryViewModel
         )

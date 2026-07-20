@@ -321,6 +321,74 @@ struct LibraryMutationActionsTests {
         #expect(otherLibraryViewModel.isInLibrary(playlistId: playlist.id))
     }
 
+    @Test("Add album uses OLAK target and updates visible library")
+    func addAlbumUsesLibraryTarget() async throws {
+        let album = TestFixtures.makeAlbum(id: "MPRE-album", title: "Album")
+        self.mockClient.shouldAutoUpdatePlaylistLibraryOnMutation = false
+
+        try await LibraryMutationActions.addAlbumToLibrary(
+            album,
+            targetPlaylistId: "OLAK-album-target",
+            client: self.mockClient,
+            libraryViewModel: self.libraryViewModel
+        )
+
+        #expect(self.mockClient.subscribeToPlaylistIds == ["OLAK-album-target"])
+        #expect(self.libraryViewModel.isInLibrary(albumId: "MPRE-album"))
+    }
+
+    @Test("Remove album uses OLAK target and updates visible library")
+    func removeAlbumUsesLibraryTarget() async throws {
+        let album = TestFixtures.makeAlbum(id: "MPRE-album", title: "Album")
+        self.libraryViewModel.addToLibrary(album: album)
+        self.mockClient.libraryAlbums = [album]
+        self.mockClient.shouldAutoUpdatePlaylistLibraryOnMutation = false
+
+        try await LibraryMutationActions.removeAlbumFromLibrary(
+            album,
+            targetPlaylistId: "OLAK-album-target",
+            client: self.mockClient,
+            libraryViewModel: self.libraryViewModel
+        )
+
+        #expect(self.mockClient.unsubscribeFromPlaylistIds == ["OLAK-album-target"])
+        #expect(!self.libraryViewModel.isInLibrary(albumId: "MPRE-album"))
+    }
+
+    @Test("Failed album add leaves visible library unchanged")
+    func failedAlbumAddLeavesLibraryUnchanged() async {
+        let album = TestFixtures.makeAlbum(id: "MPRE-album", title: "Album")
+        self.mockClient.shouldThrowError = YTMusicError.apiError(message: "Rejected", code: 400)
+
+        await #expect(throws: YTMusicError.self) {
+            try await LibraryMutationActions.addAlbumToLibrary(
+                album,
+                targetPlaylistId: "OLAK-album-target",
+                client: self.mockClient,
+                libraryViewModel: self.libraryViewModel
+            )
+        }
+
+        #expect(!self.libraryViewModel.isInLibrary(albumId: "MPRE-album"))
+    }
+
+    @Test("Failed playlist removal propagates and preserves membership")
+    func failedPlaylistRemovalPreservesMembership() async {
+        let playlist = TestFixtures.makePlaylist(id: "VL-saved", title: "Saved Playlist")
+        self.libraryViewModel.addToLibrary(playlist: playlist)
+        self.mockClient.shouldThrowError = YTMusicError.apiError(message: "Rejected", code: 400)
+
+        await #expect(throws: YTMusicError.self) {
+            try await LibraryMutationActions.removePlaylistFromLibrary(
+                playlist,
+                client: self.mockClient,
+                libraryViewModel: self.libraryViewModel
+            )
+        }
+
+        #expect(self.libraryViewModel.isInLibrary(playlistId: playlist.id))
+    }
+
     private func waitUntil(_ condition: @autoclosure () -> Bool, timeout: Duration = .seconds(1)) async -> Bool {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: timeout)

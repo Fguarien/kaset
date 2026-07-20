@@ -78,7 +78,7 @@ enum LibraryMutationActions {
         _ playlist: Playlist,
         client: any YTMusicClientProtocol,
         libraryViewModel: LibraryViewModel?
-    ) async {
+    ) async throws {
         do {
             try await client.subscribeToPlaylist(playlistId: playlist.id)
             self.invalidateResponseCaches()
@@ -98,6 +98,7 @@ enum LibraryMutationActions {
             DiagnosticsLogger.api.info("Added playlist to library: \(playlist.title)")
         } catch {
             DiagnosticsLogger.api.error("Failed to add playlist to library: \(error.localizedDescription)")
+            throw error
         }
     }
 
@@ -106,7 +107,7 @@ enum LibraryMutationActions {
         _ playlist: Playlist,
         client: any YTMusicClientProtocol,
         libraryViewModel: LibraryViewModel?
-    ) async {
+    ) async throws {
         do {
             try await client.unsubscribeFromPlaylist(playlistId: playlist.id)
             self.invalidateResponseCaches()
@@ -120,6 +121,68 @@ enum LibraryMutationActions {
             DiagnosticsLogger.api.info("Removed playlist from library: \(playlist.title)")
         } catch {
             DiagnosticsLogger.api.error("Failed to remove playlist from library: \(error.localizedDescription)")
+            throw error
+        }
+    }
+
+    /// Adds an album to the library using its OLAK playlist target.
+    static func addAlbumToLibrary(
+        _ album: Album,
+        targetPlaylistId: String,
+        client: any YTMusicClientProtocol,
+        libraryViewModel: LibraryViewModel?
+    ) async throws {
+        do {
+            try await client.subscribeToPlaylist(playlistId: targetPlaylistId)
+            let libraryAlbum = Album(
+                id: album.id,
+                title: album.title,
+                artists: album.artists,
+                thumbnailURL: album.thumbnailURL,
+                year: album.year,
+                trackCount: album.trackCount,
+                libraryTargetId: targetPlaylistId
+            )
+            self.invalidateResponseCaches()
+            libraryViewModel?.markNeedsReloadOnActivation()
+            LibraryMutationBroadcaster.shared.albumAdded(libraryAlbum)
+
+            try? await Task.sleep(for: .milliseconds(500))
+            await LibraryMutationBroadcaster.shared.reconcileAddedAlbum(libraryAlbum)
+            self.invalidateResponseCaches()
+            DiagnosticsLogger.api.info("Added album to library: \(album.title)")
+        } catch {
+            DiagnosticsLogger.api.error("Failed to add album to library: \(error.localizedDescription)")
+            throw error
+        }
+    }
+
+    /// Removes an album from the library using its OLAK playlist target.
+    static func removeAlbumFromLibrary(
+        _ album: Album,
+        targetPlaylistId: String,
+        client: any YTMusicClientProtocol,
+        libraryViewModel: LibraryViewModel?
+    ) async throws {
+        do {
+            try await client.unsubscribeFromPlaylist(playlistId: targetPlaylistId)
+            self.invalidateResponseCaches()
+            libraryViewModel?.markNeedsReloadOnActivation()
+            LibraryMutationBroadcaster.shared.albumRemoved(
+                albumId: album.id,
+                targetPlaylistId: targetPlaylistId
+            )
+
+            try? await Task.sleep(for: .milliseconds(500))
+            await LibraryMutationBroadcaster.shared.reconcileRemovedAlbum(
+                albumId: album.id,
+                targetPlaylistId: targetPlaylistId
+            )
+            self.invalidateResponseCaches()
+            DiagnosticsLogger.api.info("Removed album from library: \(album.title)")
+        } catch {
+            DiagnosticsLogger.api.error("Failed to remove album from library: \(error.localizedDescription)")
+            throw error
         }
     }
 

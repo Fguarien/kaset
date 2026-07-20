@@ -21,6 +21,7 @@ struct LibraryViewModelTests {
     func initialState() {
         #expect(self.viewModel.loadingState == .idle)
         #expect(self.viewModel.playlists.isEmpty)
+        #expect(self.viewModel.albums.isEmpty)
         #expect(self.viewModel.artists.isEmpty)
         #expect(self.viewModel.podcastShows.isEmpty)
         #expect(self.viewModel.uploadedSongsPlaylist == nil)
@@ -35,6 +36,18 @@ struct LibraryViewModelTests {
         self.mockClient.libraryPlaylists = [
             TestFixtures.makePlaylist(id: "VL1", title: "Playlist 1"),
             TestFixtures.makePlaylist(id: "VL2", title: "Playlist 2"),
+        ]
+        self.mockClient.libraryAlbums = [
+            Album(
+                id: "MPRE1",
+                title: "Album 1",
+                artists: nil,
+                thumbnailURL: nil,
+                year: "2024",
+                trackCount: 10,
+                libraryTargetId: "OLAK1"
+            ),
+            TestFixtures.makeAlbum(id: "MPRE2", title: "Album 2"),
         ]
         self.mockClient.libraryArtists = [
             TestFixtures.makeArtist(id: "MPLAUC-channel-1", name: "Artist 1"),
@@ -57,6 +70,9 @@ struct LibraryViewModelTests {
         #expect(self.viewModel.loadingState == .loaded)
         #expect(self.viewModel.playlists.count == 2)
         #expect(self.viewModel.playlists[0].title == "Playlist 1")
+        #expect(self.viewModel.albums.map(\.title) == ["Album 1", "Album 2"])
+        #expect(self.viewModel.isInLibrary(albumId: "MPRE1"))
+        #expect(self.viewModel.isInLibrary(albumId: "different-browse-id", targetPlaylistId: "OLAK1"))
         #expect(self.viewModel.artists.count == 1)
         #expect(self.viewModel.artists[0].name == "Artist 1")
         #expect(self.viewModel.podcastShows.count == 1)
@@ -82,11 +98,28 @@ struct LibraryViewModelTests {
             Issue.record("Expected error state")
         }
         #expect(self.viewModel.playlists.isEmpty)
+        #expect(self.viewModel.albums.isEmpty)
         #expect(self.viewModel.artists.isEmpty)
         #expect(self.viewModel.podcastShows.isEmpty)
         #expect(self.viewModel.libraryPlaylistIds.isEmpty)
         #expect(self.viewModel.libraryArtistIds.isEmpty)
         #expect(self.viewModel.libraryPodcastIds.isEmpty)
+    }
+
+    @Test("Adding album deduplicates equivalent OLAK target")
+    func addAlbumDeduplicatesLibraryTarget() {
+        self.viewModel.addToLibrary(album: TestFixtures.makeAlbum(
+            id: "MPRE-old",
+            title: "Old Album",
+            libraryTargetId: "OLAK-shared"
+        ))
+        self.viewModel.addToLibrary(album: TestFixtures.makeAlbum(
+            id: "MPRE-new",
+            title: "New Album",
+            libraryTargetId: "OLAK-shared"
+        ))
+
+        #expect(self.viewModel.albums.map(\.id) == ["MPRE-new"])
     }
 
     @Test("Load playlist success")

@@ -597,7 +597,7 @@ struct SearchView: View {
         if self.authService.hasPersonalAccount {
             Button {
                 Task {
-                    await SongActionsHelper.addPlaylistToLibrary(
+                    try? await SongActionsHelper.addPlaylistToLibrary(
                         playlist,
                         client: self.viewModel.client,
                         libraryViewModel: self.libraryViewModel

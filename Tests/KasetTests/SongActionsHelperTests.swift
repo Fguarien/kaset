@@ -329,11 +329,11 @@ struct SongActionsHelperTests {
     }
 
     @Test("addPlaylistToLibrary keeps optimistic playlist when refresh response is stale")
-    func addPlaylistToLibraryPreservesOptimisticPlaylist() async {
+    func addPlaylistToLibraryPreservesOptimisticPlaylist() async throws {
         let playlist = TestFixtures.makePlaylist(id: "VL-test-playlist", title: "Test Playlist")
         self.mockClient.shouldAutoUpdatePlaylistLibraryOnMutation = false
 
-        await SongActionsHelper.addPlaylistToLibrary(
+        try await SongActionsHelper.addPlaylistToLibrary(
             playlist,
             client: self.mockClient,
             libraryViewModel: self.libraryViewModel
@@ -346,7 +346,7 @@ struct SongActionsHelperTests {
     }
 
     @Test("removePlaylistFromLibrary keeps optimistic removal when refresh response is stale")
-    func removePlaylistFromLibraryPreservesOptimisticRemoval() async {
+    func removePlaylistFromLibraryPreservesOptimisticRemoval() async throws {
         let playlist = TestFixtures.makePlaylist(id: "VL-test-playlist", title: "Test Playlist")
         self.mockClient.libraryPlaylists = [playlist]
         self.mockClient.shouldAutoUpdatePlaylistLibraryOnMutation = false
@@ -354,7 +354,7 @@ struct SongActionsHelperTests {
         await self.libraryViewModel.load()
         self.mockClient.reset()
 
-        await SongActionsHelper.removePlaylistFromLibrary(
+        try await SongActionsHelper.removePlaylistFromLibrary(
             playlist,
             client: self.mockClient,
             libraryViewModel: self.libraryViewModel

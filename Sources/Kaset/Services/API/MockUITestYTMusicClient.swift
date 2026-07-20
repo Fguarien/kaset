@@ -273,7 +273,12 @@ final class MockUITestYTMusicClient: YTMusicClientProtocol {
 
     func getLibraryContent() async throws -> PlaylistParser.LibraryContent {
         try? await Task.sleep(for: .milliseconds(100))
-        return PlaylistParser.LibraryContent(playlists: self.playlists, artists: [], podcastShows: [])
+        return PlaylistParser.LibraryContent(
+            playlists: self.playlists,
+            albums: Self.defaultAlbums(count: 4),
+            artists: [],
+            podcastShows: []
+        )
     }
 
     func getLikedSongs() async throws -> LikedSongsResponse {
@@ -298,7 +303,10 @@ final class MockUITestYTMusicClient: YTMusicClientProtocol {
         let detail = PlaylistDetail(
             playlist: playlist,
             tracks: Self.defaultSongs(count: 10),
-            duration: "30 minutes"
+            duration: "30 minutes",
+            libraryTargetId: playlist.isAlbum
+                ? (playlist.id.hasPrefix("OLAK") ? playlist.id : "OLAK-mock-album-target")
+                : nil
         )
         return PlaylistTracksResponse(detail: detail, continuationToken: nil)
     }

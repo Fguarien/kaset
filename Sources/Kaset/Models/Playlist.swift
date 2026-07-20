@@ -193,6 +193,7 @@ struct PlaylistDetail: Identifiable {
     let canDelete: Bool
     let tracks: [Song]
     let duration: String?
+    let libraryTargetId: String?
 
     /// Whether this is an album (vs a playlist).
     /// Albums have IDs starting with "OLAK" or "MPRE".
@@ -210,7 +211,12 @@ struct PlaylistDetail: Identifiable {
         LikedMusicPlaylist.matches(id: self.id) || self.isUploadedSongs || self.canDelete
     }
 
-    init(playlist: Playlist, tracks: [Song], duration: String? = nil) {
+    init(
+        playlist: Playlist,
+        tracks: [Song],
+        duration: String? = nil,
+        libraryTargetId: String? = nil
+    ) {
         self.id = playlist.id
         self.title = playlist.title
         self.description = playlist.description
@@ -220,6 +226,7 @@ struct PlaylistDetail: Identifiable {
         self.canDelete = playlist.canDelete
         self.tracks = tracks
         self.duration = duration
+        self.libraryTargetId = libraryTargetId
     }
 
     /// Track count to show in the UI, preferring the API-reported total over the loaded row count.

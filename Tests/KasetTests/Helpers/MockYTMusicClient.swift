@@ -67,6 +67,7 @@ final class MockYTMusicClient: YTMusicClientProtocol { // swiftlint:disable:this
     var searchContinuationResponses: [String: SearchResponse] = [:]
     var searchSuggestions: [SearchSuggestion] = []
     var libraryPlaylists: [Playlist] = []
+    var libraryAlbums: [Album] = []
     var libraryArtists: [Artist] = []
     var libraryPodcastShows: [PodcastShow] = []
     var uploadedSongsPlaylist: Playlist?
@@ -764,6 +765,7 @@ final class MockYTMusicClient: YTMusicClientProtocol { // swiftlint:disable:this
         }
         return PlaylistParser.LibraryContent(
             playlists: self.libraryPlaylists,
+            albums: self.libraryAlbums,
             artists: self.libraryArtists,
             podcastShows: self.libraryPodcastShows,
             uploadedSongsPlaylist: self.uploadedSongsPlaylist

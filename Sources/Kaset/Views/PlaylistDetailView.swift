@@ -17,8 +17,6 @@ struct PlaylistDetailView: View {
     @Environment(LibraryViewModel.self) var libraryViewModel: LibraryViewModel?
     @Environment(\.dismiss) var dismiss
     @Environment(\.onPlaylistDeleted) var onPlaylistDeleted
-    /// Tracks whether this playlist has been added to library in this session.
-    @State var isAddedToLibrary: Bool = false
     /// Whether the refine playlist sheet is visible.
     @State var showRefineSheet: Bool = false
     /// AI-generated playlist changes.
@@ -31,7 +29,13 @@ struct PlaylistDetailView: View {
     @State private var refineError: String?
     /// Computed property to check if playlist is in library.
     var isInLibrary: Bool {
-        self.libraryViewModel?.isInLibrary(playlistId: self.playlist.id) ?? false
+        if self.playlist.isAlbum {
+            return self.libraryViewModel?.isInLibrary(
+                albumId: self.playlist.id,
+                targetPlaylistId: self.viewModel.playlistDetail?.libraryTargetId
+            ) ?? false
+        }
+        return self.libraryViewModel?.isInLibrary(playlistId: self.playlist.id) ?? false
     }
 
     var hasPersonalAccount: Bool {
@@ -616,28 +620,6 @@ struct PlaylistDetailView: View {
                 isPlayable: song.isPlayable,
                 playlistSetVideoId: song.playlistSetVideoId
             )
-        }
-    }
-
-    func toggleLibrary() {
-        let currentlyInLibrary = self.isInLibrary || self.isAddedToLibrary
-        HapticService.success()
-        Task {
-            if currentlyInLibrary {
-                await SongActionsHelper.removePlaylistFromLibrary(
-                    self.playlist,
-                    client: self.viewModel.client,
-                    libraryViewModel: self.libraryViewModel
-                )
-                self.isAddedToLibrary = false
-            } else {
-                await SongActionsHelper.addPlaylistToLibrary(
-                    self.playlist,
-                    client: self.viewModel.client,
-                    libraryViewModel: self.libraryViewModel
-                )
-                self.isAddedToLibrary = true
-            }
         }
     }
 

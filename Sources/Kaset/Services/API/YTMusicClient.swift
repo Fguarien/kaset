@@ -692,10 +692,12 @@ final class YTMusicClient: YTMusicClientProtocol {
 
         let landingContent = PlaylistParser.parseLibraryContent(landingData)
         let playlists = try await self.fetchLibraryPlaylists(fallback: landingContent.playlists)
+        let albums = try await self.fetchLibraryAlbums(fallback: landingContent.albums)
         let (artists, artistsSource) = try await self.fetchLibraryArtists(fallback: landingContent.artists)
         let uploadedSongsPlaylist = try await self.fetchUploadedSongsPlaylist()
         let content = PlaylistParser.LibraryContent(
             playlists: playlists,
+            albums: albums,
             artists: artists,
             podcastShows: landingContent.podcastShows,
             uploadedSongsPlaylist: uploadedSongsPlaylist,
@@ -704,7 +706,7 @@ final class YTMusicClient: YTMusicClientProtocol {
 
         let hasUploadedSongs = content.uploadedSongsPlaylist != nil
         self.logger.info(
-            "Parsed \(content.playlists.count) library playlists, \(content.artists.count) artists, \(content.podcastShows.count) podcasts, uploads: \(hasUploadedSongs)"
+            "Parsed \(content.playlists.count) library playlists, \(content.albums.count) albums, \(content.artists.count) artists, \(content.podcastShows.count) podcasts, uploads: \(hasUploadedSongs)"
         )
         return content
     }
@@ -733,6 +735,57 @@ final class YTMusicClient: YTMusicClientProtocol {
         } catch {
             self.logger.warning("Library playlists endpoint failed, falling back to landing preview: \(error.localizedDescription)")
             return fallbackPlaylists
+        }
+    }
+
+    /// Fetches saved albums from the dedicated browse endpoint with graceful fallback to the Library landing preview.
+    private func fetchLibraryAlbums(fallback fallbackAlbums: [Album]) async throws -> [Album] {
+        do {
+            let albumsData = try await self.request(
+                "browse",
+                body: ["browseId": "FEmusic_liked_albums"],
+                ttl: APICache.TTL.library
+            )
+            let firstPage = PlaylistParser.parseLibraryAlbumsPage(albumsData)
+            var dedicatedAlbums = firstPage.albums
+            var nextPage = firstPage.nextPage
+            var requestedContinuationTokens = Set<String>()
+
+            while let cursor = nextPage,
+                  requestedContinuationTokens.insert(cursor).inserted
+            {
+                do {
+                    let continuationData = try await self.requestContinuation(
+                        cursor,
+                        ttl: APICache.TTL.library,
+                        authPolicy: .required
+                    )
+                    let page = PlaylistParser.parseLibraryAlbumsContinuation(continuationData)
+                    dedicatedAlbums = PlaylistParser.mergedLibraryAlbums(
+                        dedicated: dedicatedAlbums,
+                        fallback: page.albums
+                    )
+                    nextPage = page.nextPage
+                } catch {
+                    self.logger.warning("Saved albums continuation failed, keeping \(dedicatedAlbums.count) loaded albums: \(error.localizedDescription)")
+                    break
+                }
+            }
+
+            if dedicatedAlbums.isEmpty {
+                if !fallbackAlbums.isEmpty {
+                    self.logger.warning("Saved albums endpoint returned no albums, falling back to landing preview")
+                }
+                return fallbackAlbums
+            }
+
+            return PlaylistParser.mergedLibraryAlbums(
+                dedicated: dedicatedAlbums,
+                fallback: fallbackAlbums
+            )
+        } catch {
+            self.logger.warning("Saved albums endpoint failed, falling back to landing preview: \(error.localizedDescription)")
+            return fallbackAlbums
         }
     }
 
@@ -1720,10 +1773,10 @@ final class YTMusicClient: YTMusicClientProtocol {
 
     private static let authRequiredBrowseIds: Set<String> = [
         "FEmusic_liked_playlists",
+        "FEmusic_liked_albums",
         "FEmusic_liked_videos",
         "FEmusic_history",
         "FEmusic_library_landing",
-        "FEmusic_library_albums",
         "FEmusic_library_artists",
         "FEmusic_library_corpus_artists",
         "FEmusic_library_corpus_track_artists",
