@@ -421,6 +421,12 @@ ${APP_LOCALIZATIONS_PLIST}
     </dict>
     <key>NSAccentColorName</key>
     <string>AccentColor</string>
+    <!-- Allow plain-HTTP requests to the LAN jukebox backend (see JukeboxDownloadService). -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+    </dict>
     <key>CFBundleIdentifier</key>
     <string>${BUNDLE_ID}</string>
     <key>CFBundleInfoDictionaryVersion</key>
