@@ -16,6 +16,8 @@ struct SimplePlaylistDetailView: View {
     @State var viewModel: PlaylistDetailViewModel
     @Environment(PlayerService.self) private var playerService
     @Environment(SongLikeStatusManager.self) private var likeStatusManager
+    @Environment(AuthService.self) private var authService
+    @Environment(JukeboxDownloadService.self) private var jukeboxDownloadService
 
     init(
         playlist: Playlist,
@@ -180,6 +182,7 @@ struct SimplePlaylistDetailView: View {
                 .buttonStyle(.plain)
                 .disabled(!track.isPlayable)
                 .opacity(track.isPlayable ? 1 : 0.5)
+                .contextMenu { self.trackContextMenu(track, index: index, tracks: tracks) }
                 .onAppear {
                     if index >= tracks.count - 3, self.viewModel.hasMore {
                         Task { await self.viewModel.loadMore() }
@@ -198,6 +201,61 @@ struct SimplePlaylistDetailView: View {
                 }
             }
         }
+    }
+
+    /// Same actions as the macOS 26 playlist rows — without them there is no way at all to
+    /// edit a playlist on macOS 15, since this view is the only one the OS ever renders.
+    @ViewBuilder
+    private func trackContextMenu(_ track: Song, index: Int, tracks: [Song]) -> some View {
+        if track.isPlayable {
+            Button {
+                Task { await self.playFromIndex(index, tracks: tracks) }
+            } label: {
+                Label(String(localized: "Play"), systemImage: "play.fill")
+            }
+
+            if self.authService.hasPersonalAccount {
+                Divider()
+                LikeDislikeContextMenu(song: track, likeStatusManager: self.likeStatusManager)
+
+                Divider()
+                Button {
+                    SongActionsHelper.addToLibrary(track, playerService: self.playerService)
+                } label: {
+                    Label(String(localized: "Add to Library"), systemImage: "plus.circle")
+                }
+
+                AddToPlaylistContextMenu(song: track, client: self.viewModel.client)
+            }
+
+            Divider()
+            AddToQueueContextMenu(song: track, playerService: self.playerService)
+
+            Divider()
+            DownloadContextMenu.menuItem(for: track, service: self.jukeboxDownloadService)
+        }
+
+        if self.canRemoveTrack(track) {
+            Divider()
+            Button(role: .destructive) {
+                Task {
+                    await LibraryMutationActions.removeSongFromPlaylist(
+                        track, from: self.viewModel, client: self.viewModel.client
+                    )
+                }
+            } label: {
+                Label(String(localized: "Remove from Playlist"), systemImage: "minus.circle")
+            }
+        }
+    }
+
+    private func canRemoveTrack(_ track: Song) -> Bool {
+        guard let detail = self.viewModel.playlistDetail else { return false }
+        return !self.viewModel.isRemovingTrack
+            && detail.canDelete
+            && !detail.isAlbum
+            && !detail.isUploadedSongs
+            && track.playlistSetVideoId != nil
     }
 
     private func playFromIndex(_ index: Int, tracks: [Song]) async {
