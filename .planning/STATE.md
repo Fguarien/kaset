@@ -5,14 +5,14 @@
 See: .planning/PROJECT.md (updated 2026-07-20)
 
 **Core value:** One click on the playing song → a tagged mp3 lands in the NAS music library. The app never blocks and always tells the user whether it worked.
-**Current focus:** All 3 phases delivered — pending manual GUI click-test by user.
+**Current focus:** All 3 phases delivered and click-tested. Playlist-wide download shipped on top (2026-07-21).
 
 ## Current Position
 
 Phase: 3 of 3 complete (Download UI Action + Feedback)
 Plan: —
-Status: Delivered — code shipped, backend live-tested, Swift build clean.
-Last activity: 2026-07-20 — Phases 1-3 implemented, deployed, built (0 errors).
+Status: Delivered — click-tested on the Mac: playlist download button visible and downloading.
+Last activity: 2026-07-21 — CollectionDownloadButton (whole-playlist download) shipped; had to be mounted in LegacyFallbackViews too since the Mac is on macOS 15 and never renders the macOS-26-gated views.
 
 Progress: [██████████] 100% (implementation)
 
