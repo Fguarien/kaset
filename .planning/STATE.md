@@ -60,6 +60,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
+- **[2026-07-21] Bundle Info.plist fix** — `Scripts/build-app.sh` regenerates `Contents/Info.plist` from a heredoc and ignores the repo-root `Info.plist`, so the Phase 2 ATS exception never shipped. Fixed (`fc27150`), rebuilt + ad-hoc signed, and **installed to `/Applications/Kaset.app`** on the Mac (old upstream 0.12.0 backed up at `~/Kaset-0.12.0-backup.app`). Verified: `NSAllowsLocalNetworking = true` in the installed bundle.
 - **Manual GUI click-test** (needs signed-in YT Music account, interactive): play a song → right-click → Download → confirm toast + mp3 in NAS. Backend already proven via curl; this validates the in-app wiring end-to-end.
 
 ### Blockers/Concerns
