@@ -396,6 +396,37 @@ fi
 
 APP_LOCALIZATIONS_PLIST=$(emit_bundle_localizations_plist "$APP_BUNDLE/Contents/Resources" "$DEVELOPMENT_LOCALIZATION")
 
+# Sparkle: enabled only for release builds (KASET_SPARKLE=on). A local build carries
+# a lower CFBundleVersion than the upstream appcast, so leaving the upstream feed in
+# the bundle makes Sparkle silently "update" the freshly installed local app back to
+# the upstream release on first launch.
+if [[ "${KASET_SPARKLE:-off}" == "on" ]]; then
+  SPARKLE_PLIST=$(cat <<'SPARKLE'
+    <key>SUFeedURL</key>
+    <string>https://raw.githubusercontent.com/sozercan/kaset/main/appcast.xml</string>
+    <key>SUPublicEDKey</key>
+    <string>qa2zoeXHqn+pluxQSGjn5HyIYA/iFtrEJz7S1BoslpI=</string>
+    <key>SUEnableAutomaticChecks</key>
+    <true/>
+    <key>SUScheduledCheckInterval</key>
+    <integer>86400</integer>
+    <key>SUAllowsAutomaticUpdates</key>
+    <true/>
+    <key>SUEnableInstallerLauncherService</key>
+    <true/>
+SPARKLE
+)
+else
+  SPARKLE_PLIST=$(cat <<'SPARKLE'
+    <!-- Local build: no feed, auto-update disabled (set KASET_SPARKLE=on for releases). -->
+    <key>SUEnableAutomaticChecks</key>
+    <false/>
+    <key>SUAllowsAutomaticUpdates</key>
+    <false/>
+SPARKLE
+)
+fi
+
 cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -468,18 +499,7 @@ ${APP_LOCALIZATIONS_PLIST}
     </array>
 
     <!-- Sparkle Auto-Update Configuration -->
-    <key>SUFeedURL</key>
-    <string>https://raw.githubusercontent.com/sozercan/kaset/main/appcast.xml</string>
-    <key>SUPublicEDKey</key>
-    <string>qa2zoeXHqn+pluxQSGjn5HyIYA/iFtrEJz7S1BoslpI=</string>
-    <key>SUEnableAutomaticChecks</key>
-    <true/>
-    <key>SUScheduledCheckInterval</key>
-    <integer>86400</integer>
-    <key>SUAllowsAutomaticUpdates</key>
-    <true/>
-    <key>SUEnableInstallerLauncherService</key>
-    <true/>
+${SPARKLE_PLIST}
 
     <!-- AppleScript Support -->
     <key>NSAppleScriptEnabled</key>
