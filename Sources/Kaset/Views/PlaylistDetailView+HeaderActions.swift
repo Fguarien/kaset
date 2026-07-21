@@ -53,6 +53,12 @@ extension PlaylistDetailView {
                 showsTitles: showsTitles
             )
 
+            CollectionDownloadButton(
+                name: detail.title,
+                songs: playableTracks,
+                showsTitle: showsTitles
+            )
+
             self.sidebarButton(detail, showsTitles: showsTitles)
             self.libraryButton(detail, showsTitles: showsTitles)
             self.playlistManagementButtons(detail, showsTitles: showsTitles)

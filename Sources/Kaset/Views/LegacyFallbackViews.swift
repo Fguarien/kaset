@@ -128,6 +128,11 @@ struct SimplePlaylistDetailView: View {
                     }
                     .buttonStyle(.bordered)
                     .disabled(playableTracks.isEmpty)
+
+                    CollectionDownloadButton(
+                        name: detail.title,
+                        songs: playableTracks
+                    )
                 }
                 .padding(.top, 6)
             }
