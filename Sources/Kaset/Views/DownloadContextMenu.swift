@@ -6,7 +6,6 @@ import SwiftUI
 /// The request is fire-and-forget; progress/result is surfaced by `JukeboxDownloadToast`.
 @MainActor
 enum DownloadContextMenu {
-    @ViewBuilder
     static func menuItem(for song: Song, service: JukeboxDownloadService) -> some View {
         Button {
             Task { await service.download(song) }

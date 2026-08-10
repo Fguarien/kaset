@@ -30,17 +30,41 @@ InnerTube path, which is independent of the app's DRM session.
   playlist run `elyn_lane/` — produced by the app, not by curl.
 - Last file written **2026-07-21**. No use since.
 
-## What is NOT done — read this before reviving
+## The three loose ends — all closed 2026-08-10
 
-1. **The Mac does not run this fork.** As of 2026-08-10 `/Applications/Kaset.app` is the
-   *upstream* build: `CFBundleVersion 23`, `TeamIdentifier 57QNR9B89Q`, hardened runtime
-   (`flags=0x10000`), 53 MB binary, bundle installed 2026-08-05, `SUFeedURL` = upstream
-   appcast, **no** `NSAppTransportSecurity`. So the Download action is absent from the
-   installed app. The fork bundle survives at `~/kaset/.build/app/Kaset.app` (2026-07-21)
-   and the pre-fork backup at `~/Kaset-0.12.0-backup.app`.
-2. **Single-track GUI click-test never performed** by a human (backend proven, in-app
-   wiring for `PlayerService.currentTrack` unvalidated end-to-end).
-3. **swiftformat/swiftlint absent** from the Mac → house style never linted.
+They were found open at close and were resolved the same day rather than carried forward.
+
+1. **The Mac did not run this fork** — `/Applications/Kaset.app` had reverted to the upstream
+   build (`CFBundleVersion 23`, `TeamIdentifier 57QNR9B89Q`, hardened runtime, installed
+   2026-08-05, upstream `SUFeedURL`, no ATS key). **Fixed**: rebuilt from the current sources on
+   the Mac, ad-hoc signed, installed. The installed bundle now reports `flags=0x2(adhoc)`,
+   `NSAllowsLocalNetworking = true`, `SUFeedURL` *Does Not Exist*, `SUEnableAutomaticChecks =
+   false`, `CFBundleVersion 100`. The displaced upstream build is parked at
+   `~/Kaset-upstream-b23-backup.app` (restore with a plain `cp -R`).
+2. **The client half was never tested** — only the backend had been proven (curl + the mp3 on
+   the NAS). **Fixed**: `Tests/KasetTests/JukeboxDownloadServiceTests.swift`, 7 tests, green.
+   They pin the POST target, method, content type, the exact JSON keys the FastAPI side reads,
+   `ok`/`skip` → success, `fail` → the backend's own reason, an empty `videoId` failing before
+   any network call, the Settings URL (whitespace trimmed), the collection-state counts and the
+   playlist job id. Run: `swift test --disable-xctest --filter JukeboxDownloadServiceTests`.
+   ⚠️ Plain `swift test` (the command in CONTRIBUTING.md) dies on this Mac with
+   `error: signalled(11): … swiftpm-xctest-helper` **before running anything** — a toolchain
+   issue in the XCTest bridge, unrelated to these tests. `--disable-xctest` runs the Swift
+   Testing suites and is the invocation that works here.
+3. **No linters on the Mac** (no Homebrew) — **Fixed**: swiftformat 0.62.1 and swiftlint 0.65.0
+   installed as release binaries in `~/bin` (de-quarantined). swiftformat found 14 violations in
+   the feature files (`redundantViewBuilder`, `wrapPropertyBodies`, `blankLinesBetweenScopes`,
+   `markTypes`, `wrapIfStatementBodies`); all fixed, re-lint clean (`0/4 files require
+   formatting`), swiftlint clean on the same files, tests still green afterwards, app rebuilt
+   and reinstalled from the formatted sources.
+
+Residual, deliberately: nobody has performed the single-track right-click → Download **by hand**.
+The app is installed and capable of it; every layer beneath the menu item is now covered by
+tests. A 30-second manual check remains available, it is not a blocker.
+
+**Note for `zsh` users driving the Mac over SSH**: `swiftformat $FILES` with an unquoted
+variable passes the whole list as *one* argument — zsh does not word-split. Use `${=FILES}`
+or explicit paths.
 
 ## Reviving
 

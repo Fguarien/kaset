@@ -122,13 +122,21 @@ final class JukeboxDownloadService {
         /// Job currently downloading this exact collection, if any.
         var runningJobID: String?
 
-        var isFullyDownloaded: Bool { self.total > 0 && self.missing == 0 }
-        var isPartiallyDownloaded: Bool { self.present > 0 && self.missing > 0 }
+        var isFullyDownloaded: Bool {
+            self.total > 0 && self.missing == 0
+        }
+
+        var isPartiallyDownloaded: Bool {
+            self.present > 0 && self.missing > 0
+        }
     }
 
     /// Progress of a backend download job.
     struct JobProgress: Equatable, Identifiable {
-        var id: String { self.jobID }
+        var id: String {
+            self.jobID
+        }
+
         var jobID: String
         var name: String
         /// `running`, `done`, `cancelled`.
@@ -142,8 +150,13 @@ final class JukeboxDownloadService {
         var current: String
         var fails: [String]
 
-        var isRunning: Bool { self.state == "running" }
-        var fraction: Double { self.total > 0 ? Double(self.done) / Double(self.total) : 0 }
+        var isRunning: Bool {
+            self.state == "running"
+        }
+
+        var fraction: Double {
+            self.total > 0 ? Double(self.done) / Double(self.total) : 0
+        }
     }
 
     /// The job this app is currently following, refreshed by `pollActiveJob()`.

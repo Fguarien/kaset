@@ -76,9 +76,15 @@ Items acknowledged and carried forward from previous milestone close:
 
 | Category | Item | Status | Deferred At |
 |----------|------|--------|-------------|
-| Deployment | **The Mac runs the upstream build, not this fork.** `/Applications/Kaset.app` = `CFBundleVersion 23`, `TeamIdentifier 57QNR9B89Q`, hardened runtime, installed 2026-08-05; no `NSAppTransportSecurity`, `SUFeedURL` points at the upstream appcast. The Download feature is therefore present in code only. Local fork bundle still at `~/kaset/.build/app/Kaset.app` (2026-07-21). | Accepted at close — rebuild procedure in CLOSEOUT.md | 2026-08-10 |
-| Testing | Single-track GUI click-test never performed (play a song → right-click → Download → toast + mp3). Backend proven by curl and by 46 mp3 on the NAS; the in-app wiring for `PlayerService.currentTrack` was never validated end-to-end by a human. | Accepted at close | 2026-08-10 |
-| Tooling | swiftformat/swiftlint absent from the Mac → house-style lint never run (build is clean, code mirrors existing patterns). | Accepted at close | 2026-08-10 |
+| *(none — all three close-out items were resolved on 2026-08-10, see below)* | | | |
+
+### Closed on 2026-08-10
+
+- **Deployment** — the fork is installed again. Rebuilt on the Mac from the current sources, ad-hoc signed, copied to `/Applications/Kaset.app`. Verified on the installed bundle: `codesign` `flags=0x2(adhoc)`, `NSAppTransportSecurity:NSAllowsLocalNetworking = true`, `SUFeedURL` *Does Not Exist*, `SUEnableAutomaticChecks = false`, `CFBundleVersion 100`. The displaced upstream build (23) is kept at `~/Kaset-upstream-b23-backup.app`.
+- **Testing** — `Tests/KasetTests/JukeboxDownloadServiceTests.swift` (7 tests, all passing) pins the client half that had never been exercised: the POST target `<base>/download`, method and content type, the exact JSON keys the FastAPI side reads (`videoId`/`title`/`artist`/`album`/`cover_url`), `ok`/`skip` → success, `fail` → the backend's own reason, an empty `videoId` failing *before* any network call, the Settings URL (whitespace trimmed), `collectionState` counts and `startCollectionDownload`'s job id. Run them with `swift test --disable-xctest --filter JukeboxDownloadServiceTests` — plain `swift test` dies in `swiftpm-xctest-helper` with `signalled(11)` on this Mac, independently of these tests.
+- **Tooling** — swiftformat 0.62.1 and swiftlint 0.65.0 installed at `~/bin` on the Mac (no Homebrew there; release binaries, de-quarantined). swiftformat flagged 14 violations in the feature files (`redundantViewBuilder`, `wrapPropertyBodies`, `blankLinesBetweenScopes`, `markTypes`, `wrapIfStatementBodies`) — all fixed; re-lint reports `0/4 files require formatting`. swiftlint is clean on the same files.
+
+The only thing never done by a human is the single-track right-click itself; the app is installed and able to do it, and every layer under the menu item is now covered by tests.
 
 ## Session Continuity
 
