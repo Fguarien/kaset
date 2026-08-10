@@ -5,16 +5,17 @@
 See: .planning/PROJECT.md (updated 2026-07-20)
 
 **Core value:** One click on the playing song → a tagged mp3 lands in the NAS music library. The app never blocks and always tells the user whether it worked.
-**Current focus:** All 3 phases delivered and click-tested. Playlist-wide download shipped on top (2026-07-21).
+**Current focus:** none — milestone closed 2026-08-10. See `.planning/CLOSEOUT.md`.
 
 ## Current Position
 
 Phase: 3 of 3 complete (Download UI Action + Feedback)
 Plan: —
-Status: Delivered — click-tested on the Mac: playlist download button visible and downloading.
-Last activity: 2026-07-21 — CollectionDownloadButton (whole-playlist download) shipped; had to be mounted in LegacyFallbackViews too since the Mac is on macOS 15 and never renders the macOS-26-gated views.
+Status: **CLOSED 2026-08-10.** Code delivered and pushed; repo archived read-only on GitHub.
+Last code activity: 2026-07-21 — CollectionDownloadButton (whole-playlist download) shipped; had to be mounted in LegacyFallbackViews too since the Mac is on macOS 15 and never renders the macOS-26-gated views.
+Last real use: 2026-07-21 — 46 mp3 in `ExtraMusic/kaset` on the NAS, nothing since.
 
-Progress: [██████████] 100% (implementation)
+Progress: [██████████] 100% (implementation) — 0% deployed (see Deferred Items)
 
 ## Performance Metrics
 
@@ -60,7 +61,9 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-- **[2026-07-21] Bundle Info.plist fix** — `Scripts/build-app.sh` regenerates `Contents/Info.plist` from a heredoc and ignores the repo-root `Info.plist`, so the Phase 2 ATS exception never shipped. Fixed (`fc27150`), rebuilt + ad-hoc signed, and **installed to `/Applications/Kaset.app`** on the Mac (old upstream 0.12.0 backed up at `~/Kaset-0.12.0-backup.app`). Verified: `NSAllowsLocalNetworking = true` in the installed bundle.
+*(emptied at close — everything still open moved to Deferred Items below.)*
+
+- **[2026-07-21, done] Bundle Info.plist fix** — `Scripts/build-app.sh` regenerates `Contents/Info.plist` from a heredoc and ignores the repo-root `Info.plist`, so the Phase 2 ATS exception never shipped. Fixed (`fc27150`), rebuilt + ad-hoc signed, and **installed to `/Applications/Kaset.app`** on the Mac (old upstream 0.12.0 backed up at `~/Kaset-0.12.0-backup.app`). Verified: `NSAllowsLocalNetworking = true` in the installed bundle.
 - **Manual GUI click-test** (needs signed-in YT Music account, interactive): play a song → right-click → Download → confirm toast + mp3 in NAS. Backend already proven via curl; this validates the in-app wiring end-to-end.
 
 ### Blockers/Concerns
@@ -73,10 +76,12 @@ Items acknowledged and carried forward from previous milestone close:
 
 | Category | Item | Status | Deferred At |
 |----------|------|--------|-------------|
-| *(none)* | | | |
+| Deployment | **The Mac runs the upstream build, not this fork.** `/Applications/Kaset.app` = `CFBundleVersion 23`, `TeamIdentifier 57QNR9B89Q`, hardened runtime, installed 2026-08-05; no `NSAppTransportSecurity`, `SUFeedURL` points at the upstream appcast. The Download feature is therefore present in code only. Local fork bundle still at `~/kaset/.build/app/Kaset.app` (2026-07-21). | Accepted at close — rebuild procedure in CLOSEOUT.md | 2026-08-10 |
+| Testing | Single-track GUI click-test never performed (play a song → right-click → Download → toast + mp3). Backend proven by curl and by 46 mp3 on the NAS; the in-app wiring for `PlayerService.currentTrack` was never validated end-to-end by a human. | Accepted at close | 2026-08-10 |
+| Tooling | swiftformat/swiftlint absent from the Mac → house-style lint never run (build is clean, code mirrors existing patterns). | Accepted at close | 2026-08-10 |
 
 ## Session Continuity
 
-Last session: 2026-07-20
-Stopped at: ROADMAP.md and STATE.md created; REQUIREMENTS.md traceability filled.
-Resume file: None
+Last session: 2026-08-10 — milestone closeout (no code change).
+Stopped at: CLOSED. `.planning/` frozen, repo archived on GitHub.
+Resume file: `.planning/CLOSEOUT.md` (rebuild + un-archive procedure).

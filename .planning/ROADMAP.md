@@ -14,9 +14,9 @@ This milestone adds a "download the currently-playing song as a tagged mp3" capa
 - Integer phases (1, 2, 3): Planned milestone work
 - Decimal phases (2.1, 2.2): Urgent insertions (marked with INSERTED)
 
-- [ ] **Phase 1: Backend On-Demand Download Endpoint** - jukebox `POST /download` fetches one track by videoId → tagged mp3 on the NAS (jukebox repo)
-- [ ] **Phase 2: kaset Download Service + Config Plumbing** - `JukeboxDownloadService`, configurable Settings URL, and ATS exception so a request reaches the backend
-- [ ] **Phase 3: Download UI Action + Feedback** - context-menu "Download" on the player bar and queue rows, with toast feedback
+- [x] **Phase 1: Backend On-Demand Download Endpoint** - jukebox `POST /download` fetches one track by videoId → tagged mp3 on the NAS (jukebox repo)
+- [x] **Phase 2: kaset Download Service + Config Plumbing** - `JukeboxDownloadService`, configurable Settings URL, and ATS exception so a request reaches the backend
+- [x] **Phase 3: Download UI Action + Feedback** - context-menu "Download" on the player bar and queue rows, with toast feedback
 
 ## Phase Details
 
@@ -67,6 +67,11 @@ Phases execute in numeric order: 1 → 2 → 3
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Backend On-Demand Download Endpoint | 0/TBD | Not started | - |
-| 2. kaset Download Service + Config Plumbing | 0/TBD | Not started | - |
-| 3. Download UI Action + Feedback | 0/TBD | Not started | - |
+| 1. Backend On-Demand Download Endpoint | 1/1 | Complete | 2026-07-20 (`e9bc559`, jukebox repo) |
+| 2. kaset Download Service + Config Plumbing | 1/1 | Complete | 2026-07-20 (`d4020c2`) |
+| 3. Download UI Action + Feedback | 1/1 | Complete | 2026-07-20 (`16172c8`) |
+
+**Milestone CLOSED 2026-08-10** — see `.planning/CLOSEOUT.md`. Shipped beyond the roadmap:
+whole-playlist download (`2d94901` + jukebox `405c9ee`) and the macOS 15 legacy-view
+restoration (`ed37a61`). Not deployed: the app currently installed on the Mac is the
+**upstream** build, not this fork — see CLOSEOUT.
